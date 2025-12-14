@@ -1,0 +1,11 @@
+member_id,name,ssn,email,dob,plan_id,plan_name,coverage_start,coverage_end,premium_amount
+1001,John Doe,123-45-6789,john.doe@example.com,1950-01-15,P001,Medicare Advantage,2023-01-01,2023-12-31,120.50
+1002,Jane Smith,987-65-4321,jane.smith@example.com,1955-03-22,P002,Medicare Basic,2023-02-01,2023-12-31,110.00
+1003,Robert Brown,456-78-9012,robert.brown@example.com,1948-07-30,P001,Medicare Advantage,2023-01-01,2023-12-31,120.50
+1004,Linda White,321-54-9876,linda.white@example.com,1952-11-05,P003,Medicare Premium,2023-03-01,2023-12-31,130.75
+1005,Michael Green,654-32-1098,michael.green@example.com,1957-05-18,P002,Medicare Basic,2023-02-01,2023-12-31,110.00
+1006,Patricia Black,789-01-2345,patricia.black@example.com,1951-09-12,P003,Medicare Premium,2023-03-01,2023-12-31,130.75
+1007,David Blue,234-56-7890,david.blue@example.com,1949-12-25,P001,Medicare Advantage,2023-01-01,2023-12-31,120.50
+1008,Susan Red,890-12-3456,susan.red@example.com,1953-06-08,P002,Medicare Basic,2023-02-01,2023-12-31,110.00
+1009,James Yellow,567-89-0123,james.yellow@example.com,1956-04-14,P003,Medicare Premium,2023-03-01,2023-12-31,130.75
+1010,Karen Purple,432-10-9876,karen.purple@example.com,1954-08-27,P001,Medicare Advantage,2023-01-01,2023-12-31,120.50

@@ -1,0 +1,395 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Catalog-only Lake Formation setup with LF-Tags, Glue database, S3 bucket, IAM role, and Glue Crawler
+
+Resources:
+
+  DBAccessScopeTag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: DBAccessScope
+      TagValues:
+        - silver
+        - gold
+
+  PIITag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: PII
+      TagValues:
+        - 'true'
+        - 'false'
+
+  LFLHSilverDB:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: lf_lh_silver_db
+
+  LFLHSilverDBTagAssociation:
+    Type: AWS::LakeFormation::TagAssociation
+    DependsOn: LFLHSilverDB
+    Properties:
+      Resource:
+        Database:
+          CatalogId: !Ref AWS::AccountId
+          Name: lf_lh_silver_db
+      LFTags:
+        - CatalogId: !Ref AWS::AccountId
+          TagKey: DBAccessScope
+          TagValues:
+            - silver
+
+
+  LFLHSilverBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: lf-lh-silver-bkt
+
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueCrawlerCatalogOnlyAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::lf-lh-silver-bkt
+                  - !Sub arn:aws:s3:::lf-lh-silver-bkt/*
+              - Effect: Allow
+                Action:
+                  - glue:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - lakeformation:GetDataAccess
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*
+
+  LFLHSilverCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: lf-lh-silver-crawler
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: lf_lh_silver_db
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://lf-lh-silver-bkt/
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": {
+              "AddOrUpdateBehavior": "InheritFromTable"
+            },
+            "Tables": {
+              "AddOrUpdateBehavior": "MergeNewColumns"
+            }
+          },
+          "Grouping": {
+            "TableLevelConfiguration": 1
+          }
+        }
+
+  LFDevUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: lf-lh-dev-user
+
+  LFSuperUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: lf-lh-super-user
+
+  LFDevUserAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref LFDevUser
+
+  LFSuperUserAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref LFSuperUser
+
+  LFDevUserPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: lf-lh-dev-user-full-access
+      Users:
+        - !Ref LFDevUser
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'glue:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'athena:*'
+            Resource: '*'
+
+  LFSuperUserPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: lf-lh-super-user-full-access
+      Users:
+        - !Ref LFSuperUser
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 's3:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'glue:*'
+            Resource: '*'
+          - Effect: Allow
+            Action: 'athena:*'
+            Resource: '*'
+
+  LFSuperUserLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt LFSuperUser.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  LFDevUserLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt LFDevUser.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+            - TagKey: PII
+              TagValues:
+                - 'false'
+      Permissions:
+        - DESCRIBE
+        - SELECT
+      PermissionsWithGrantOption: []
+
+  LFDevUserLFGrantDBDescribe:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt LFDevUser.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - DESCRIBE
+      PermissionsWithGrantOption: []
+
+  LFSuperUserLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt LFSuperUser.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  GlueCrawlerRoleLFGrantDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueCrawlerRole.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  GlueCrawlerRoleLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueCrawlerRole.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  GlueJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Policies:
+        - PolicyName: GlueJobLakeFormationAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lakeformation:AddLFTagsToResource
+                Resource: '*'
+        - PolicyName: GlueJobLakeFormationTaggingAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lakeformation:AddLFTagsToResource
+                  - lakeformation:RemoveLFTagsFromResource
+                  - lakeformation:GetResourceLFTags
+                  - lakeformation:ListLFTags
+                  - lakeformation:GetLFTag
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                Resource: '*'
+
+
+  LFTagPermissionForGlueJobRole:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueJobRole.Arn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: "DBAccessScope"
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE" # Optional: if you want to allow delegation
+
+  LFTagPermissionForGlueJobRolePII:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueJobRole.Arn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: "PII"
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE" # Optional: if you want to allow delegation
+
+  GlueJobRoleLFGrantDBAccessScopeSilverDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueJobRole.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  GlueJobRoleLFGrantDBAccessScopeSilverTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !GetAtt GlueJobRole.Arn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope
+              TagValues:
+                - silver
+            - TagKey: PII
+              TagValues:
+                - '*'
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
