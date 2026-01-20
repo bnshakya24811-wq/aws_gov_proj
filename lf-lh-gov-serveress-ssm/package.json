@@ -1,0 +1,30 @@
+{
+  "name": "lf-lh-gov-serveress-ssm",
+  "version": "1.0.0",
+  "description": "Lake Formation governance using Serverless Framework v3 with SSM Parameter Store",
+  "scripts": {
+    "deploy:all": "cd stack-0-lf-tags && serverless deploy && cd ../stack-1-resources && serverless deploy && cd ../stack-2-permissions && npm install && serverless deploy",
+    "remove:all": "cd stack-2-permissions && serverless remove && cd ../stack-1-resources && serverless remove && cd ../stack-0-lf-tags && serverless remove",
+    "deploy:stack0": "cd stack-0-lf-tags && serverless deploy",
+    "deploy:stack1": "cd stack-1-resources && serverless deploy",
+    "deploy:stack2": "cd stack-2-permissions && npm install && serverless deploy",
+    "remove:stack0": "cd stack-0-lf-tags && serverless remove",
+    "remove:stack1": "cd stack-1-resources && serverless remove",
+    "remove:stack2": "cd stack-2-permissions && serverless remove",
+    "list:ssm": "aws ssm get-parameters-by-path --path /lf-lh --recursive"
+  },
+  "keywords": [
+    "serverless",
+    "aws",
+    "lake-formation",
+    "glue",
+    "data-governance",
+    "ssm",
+    "parameter-store"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "serverless": "^3.38.0"
+  }
+}

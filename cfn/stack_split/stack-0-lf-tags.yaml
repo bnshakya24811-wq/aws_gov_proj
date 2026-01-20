@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack 0 - Lake Formation Tags
+
+Resources:
+
+  DBAccessScopeTag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: DBAccessScope-o-sp
+      TagValues:
+        - silver-o-sp
+        - gold-o-sp
+
+  PIITag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: PII-o-sp
+      TagValues:
+        - 'true'
+        - 'false'
+
+Outputs:
+  DBAccessScopeTagKey:
+    Description: DBAccessScope Tag Key
+    Value: DBAccessScope-o-sp
+    Export:
+      Name: !Sub '${AWS::StackName}-DBAccessScopeTagKey'
+
+  PIITagKey:
+    Description: PII Tag Key
+    Value: PII-o-sp
+    Export:
+      Name: !Sub '${AWS::StackName}-PIITagKey'

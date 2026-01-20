@@ -1,0 +1,76 @@
+service: lf-lh-stack-0-lf-tags-o-sp-ssm
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - ssm:PutParameter
+            - ssm:GetParameter
+            - ssm:DeleteParameter
+          Resource: '*'
+
+custom:
+  ssmPrefix: /lf-lh/${self:provider.stage}
+
+resources:
+  Resources:
+    DBAccessScopeTag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: DBAccessScope-o-sp3
+        TagValues:
+          - silver-o-sp3
+          - gold-o-sp3
+
+    PIITag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: PII-o-sp3
+        TagValues:
+          - 'true'
+          - 'false'
+
+    # SSM Parameters for cross-stack references
+    DBAccessScopeTagKeyParameter:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/tags/db-access-scope-key
+        Description: DBAccessScope Tag Key
+        Type: String
+        Value: DBAccessScope-o-sp3
+
+    PIITagKeyParameter:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/tags/pii-key
+        Description: PII Tag Key
+        Type: String
+        Value: PII-o-sp3
+
+  Outputs:
+    DBAccessScopeTagKey:
+      Description: DBAccessScope Tag Key
+      Value: DBAccessScope-o-sp3
+
+    PIITagKey:
+      Description: PII Tag Key
+      Value: PII-o-sp3
+
+    DBAccessScopeTagKeySSMPath:
+      Description: SSM Parameter path for DBAccessScope tag key
+      Value: ${self:custom.ssmPrefix}/tags/db-access-scope-key
+
+    PIITagKeySSMPath:
+      Description: SSM Parameter path for PII tag key
+      Value: ${self:custom.ssmPrefix}/tags/pii-key

@@ -1,0 +1,196 @@
+service: lf-lh-stack-2-permissions-o-sp
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+
+# Standard way to define cross-stack references
+custom:
+  stack0Name: lf-lh-stack-0-lf-tags-o-sp-${self:provider.stage}
+  stack1Name: lf-lh-stack-1-resources-o-sp-${self:provider.stage}
+
+# Custom plugins
+plugins:
+  - ./revoke-iam-plugin.js
+
+resources:
+  Resources:
+    LFSuperUserLFGrant:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-LFSuperUserArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    LFDevUserLFGrant:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-LFDevUserArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+              - TagKey: !ImportValue ${self:custom.stack0Name}-PIITagKey
+                TagValues:
+                  - 'false'
+        Permissions:
+          - DESCRIBE
+          - SELECT
+        PermissionsWithGrantOption: []
+
+    LFDevUserLFGrantDBDescribe:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-LFDevUserArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - DESCRIBE
+        PermissionsWithGrantOption: []
+
+    LFSuperUserLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-LFSuperUserArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueCrawlerRoleLFGrantDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueCrawlerRoleArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueCrawlerRoleLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueCrawlerRoleArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    LFTagPermissionForGlueJobRole:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueJobRoleArn
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+            TagValues:
+              - "*"
+        Permissions:
+          - "ASSOCIATE"
+        PermissionsWithGrantOption:
+          - "ASSOCIATE"
+
+    LFTagPermissionForGlueJobRolePII:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueJobRoleArn
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: !ImportValue ${self:custom.stack0Name}-PIITagKey
+            TagValues:
+              - "*"
+        Permissions:
+          - "ASSOCIATE"
+        PermissionsWithGrantOption:
+          - "ASSOCIATE"
+
+    GlueJobRoleLFGrantDBAccessScopeSilverDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueJobRoleArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueJobRoleLFGrantDBAccessScopeSilverTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !ImportValue ${self:custom.stack1Name}-GlueJobRoleArn
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+                TagValues:
+                  - silver-o-sp2
+              - TagKey: !ImportValue ${self:custom.stack0Name}-PIITagKey
+                TagValues:
+                  - '*'
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []

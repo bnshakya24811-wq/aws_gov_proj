@@ -1,0 +1,209 @@
+service: lf-lh-stack-2-permissions-o-sp-ssm
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+
+# SSM-based cross-stack reference configuration
+custom:
+  ssmPrefix: /lf-lh/${self:provider.stage}
+  
+  # Define all SSM parameter paths for maintainability
+  ssmPaths:
+    # Resource paths from Stack 1
+    databaseName: /lf-lh/${self:provider.stage}/resources/database-name
+    bucketName: /lf-lh/${self:provider.stage}/resources/bucket-name
+    lfSuperUserArn: /lf-lh/${self:provider.stage}/resources/lf-super-user-arn
+    lfDevUserArn: /lf-lh/${self:provider.stage}/resources/lf-dev-user-arn
+    glueCrawlerRoleArn: /lf-lh/${self:provider.stage}/resources/glue-crawler-role-arn
+    glueJobRoleArn: /lf-lh/${self:provider.stage}/resources/glue-job-role-arn
+    
+    # Tag paths from Stack 0
+    dbAccessScopeTagKey: /lf-lh/${self:provider.stage}/tags/db-access-scope-key
+    piiTagKey: /lf-lh/${self:provider.stage}/tags/pii-key
+
+# Custom plugins
+plugins:
+  - ./revoke-iam-plugin.js
+
+resources:
+  Resources:
+    LFSuperUserLFGrant:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.lfSuperUserArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    LFDevUserLFGrant:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.lfDevUserArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.piiTagKey}}}'
+                TagValues:
+                  - 'false'
+        Permissions:
+          - DESCRIBE
+          - SELECT
+        PermissionsWithGrantOption: []
+
+    LFDevUserLFGrantDBDescribe:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.lfDevUserArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - DESCRIBE
+        PermissionsWithGrantOption: []
+
+    LFSuperUserLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.lfSuperUserArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueCrawlerRoleLFGrantDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueCrawlerRoleArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueCrawlerRoleLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueCrawlerRoleArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    LFTagPermissionForGlueJobRole:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueJobRoleArn}}}'
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+            TagValues:
+              - "*"
+        Permissions:
+          - "ASSOCIATE"
+        PermissionsWithGrantOption:
+          - "ASSOCIATE"
+
+    LFTagPermissionForGlueJobRolePII:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueJobRoleArn}}}'
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: '{{resolve:ssm:${self:custom.ssmPaths.piiTagKey}}}'
+            TagValues:
+              - "*"
+        Permissions:
+          - "ASSOCIATE"
+        PermissionsWithGrantOption:
+          - "ASSOCIATE"
+
+    GlueJobRoleLFGrantDBAccessScopeSilverDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueJobRoleArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    GlueJobRoleLFGrantDBAccessScopeSilverTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: '{{resolve:ssm:${self:custom.ssmPaths.glueJobRoleArn}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.dbAccessScopeTagKey}}}'
+                TagValues:
+                  - silver-o-sp3
+              - TagKey: '{{resolve:ssm:${self:custom.ssmPaths.piiTagKey}}}'
+                TagValues:
+                  - '*'
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []

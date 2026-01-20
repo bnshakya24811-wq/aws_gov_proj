@@ -1,0 +1,22 @@
+{
+  "name": "lf-lh-stack-2-permissions-o-sp",
+  "version": "1.0.0",
+  "description": "Lake Formation Tag-Based Permissions with IAM revocation plugin",
+  "main": "revoke-iam-plugin.js",
+  "dependencies": {
+    "@aws-sdk/client-cloudformation": "^3.716.0",
+    "@aws-sdk/client-lakeformation": "^3.716.0",
+    "@aws-sdk/client-sts": "^3.716.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "serverless",
+    "lake-formation",
+    "plugin"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,262 @@
+service: lf-lh-stack-1-resources-o-sp
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+
+custom:
+  stack0Name: lf-lh-stack-0-lf-tags-o-sp-${self:provider.stage}
+
+resources:
+  Resources:
+    LFLHSilverDB:
+      Type: AWS::Glue::Database
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        DatabaseInput:
+          Name: lf-lh-silver-db-o-sp2
+
+    LFLHSilverDBTagAssociation:
+      Type: AWS::LakeFormation::TagAssociation
+      DependsOn: LFLHSilverDB
+      Properties:
+        Resource:
+          Database:
+            CatalogId: !Ref AWS::AccountId
+            Name: lf-lh-silver-db-o-sp2
+        LFTags:
+          - CatalogId: !Ref AWS::AccountId
+            TagKey: !ImportValue ${self:custom.stack0Name}-DBAccessScopeTagKey
+            TagValues:
+              - silver-o-sp2
+
+    LFLHSilverBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: lf-lh-silver-bkt-o-sp2-${self:provider.stage}
+
+    GlueCrawlerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: glue-crawler-role-o-sp2-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: GlueCrawlerCatalogOnlyAccess-o-sp2
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub arn:aws:s3:::lf-lh-silver-bkt-o-sp2-${self:provider.stage}
+                    - !Sub arn:aws:s3:::lf-lh-silver-bkt-o-sp2-${self:provider.stage}/*
+                - Effect: Allow
+                  Action:
+                    - glue:*
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - lakeformation:GetDataAccess
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*
+
+    LFLHSilverCrawler:
+      Type: AWS::Glue::Crawler
+      Properties:
+        Name: lf-lh-silver-crawler-o-sp2-${self:provider.stage}
+        Role: !GetAtt GlueCrawlerRole.Arn
+        DatabaseName: lf-lh-silver-db-o-sp2
+        Targets:
+          S3Targets:
+            - Path: !Sub s3://lf-lh-silver-bkt-o-sp2-${self:provider.stage}/
+        SchemaChangePolicy:
+          UpdateBehavior: UPDATE_IN_DATABASE
+          DeleteBehavior: LOG
+        RecrawlPolicy:
+          RecrawlBehavior: CRAWL_EVERYTHING
+        Configuration: |
+          {
+            "Version": 1.0,
+            "CrawlerOutput": {
+              "Partitions": {
+                "AddOrUpdateBehavior": "InheritFromTable"
+              },
+              "Tables": {
+                "AddOrUpdateBehavior": "MergeNewColumns"
+              }
+            },
+            "Grouping": {
+              "TableLevelConfiguration": 1
+            }
+          }
+
+    LFDevUser:
+      Type: AWS::IAM::User
+      Properties:
+      UserName: lf-lh-dev-user-o-sp2-${self:provider.stage}
+
+  LFSuperUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: lf-lh-super-user-o-sp2-${self:provider.stage}
+      Properties:
+        UserName: !Ref LFDevUser
+
+    LFSuperUserAccessKey:
+      Type: AWS::IAM::AccessKey
+      Properties:
+        UserName: !Ref LFSuperUser
+
+    LFDevUserPolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: lf-lh-dev-user-full-access-o-sp2-${self:provider.stage}
+        Users:
+          - !Ref LFDevUser
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: 's3:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'glue:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'athena:*'
+              Resource: '*'
+
+    LFSuperUserPolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: lf-lh-super-user-full-access-o-sp2-${self:provider.stage}
+        Users:
+          - !Ref LFSuperUser
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: 's3:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'glue:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'athena:*'
+              Resource: '*'
+
+    GlueJobRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: glue-job-role-o-sp2-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        Path: /
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+          - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        Policies:
+          - PolicyName: GlueJobLakeFormationAccess-o-sp2
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - lakeformation:AddLFTagsToResource
+                  Resource: '*'
+          - PolicyName: GlueJobLakeFormationTaggingAccess-o-sp2
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - lakeformation:AddLFTagsToResource
+                    - lakeformation:RemoveLFTagsFromResource
+                    - lakeformation:GetResourceLFTags
+                    - lakeformation:ListLFTags
+                    - lakeformation:GetLFTag
+                    - glue:GetDatabase
+                    - glue:GetTable
+                    - glue:GetTables
+                    - glue:GetDatabase
+                    - glue:GetDatabases
+                    - glue:GetPartition
+                    - glue:GetPartitions
+                  Resource: '*'
+
+  Outputs:
+    DatabaseName:
+      Description: Glue Database Name
+      Value: lf-lh-silver-db-o-sp2
+      Export:
+        Name: ${self:provider.stackName}-DatabaseName
+
+    BucketName:
+      Description: S3 Bucket Name
+      Value: !Ref LFLHSilverBucket
+      Export:
+        Name: ${self:provider.stackName}-BucketName
+
+    GlueCrawlerRoleArn:
+      Description: Glue Crawler Role ARN
+      Value: !GetAtt GlueCrawlerRole.Arn
+      Export:
+        Name: ${self:provider.stackName}-GlueCrawlerRoleArn
+
+    GlueJobRoleArn:
+      Description: Glue Job Role ARN
+      Value: !GetAtt GlueJobRole.Arn
+      Export:
+        Name: ${self:provider.stackName}-GlueJobRoleArn
+
+    LFDevUserArn:
+      Description: LF Dev User ARN
+      Value: !GetAtt LFDevUser.Arn
+      Export:
+        Name: ${self:provider.stackName}-LFDevUserArn
+
+    LFSuperUserArn:
+      Description: LF Super User ARN
+      Value: !GetAtt LFSuperUser.Arn
+      Export:
+        Name: ${self:provider.stackName}-LFSuperUserArn
+
+    LFDevUserAccessKeyId:
+      Description: LF Dev User Access Key ID
+      Value: !Ref LFDevUserAccessKey
+
+    LFDevUserSecretAccessKey:
+      Description: LF Dev User Secret Access Key
+      Value: !GetAtt LFDevUserAccessKey.SecretAccessKey
+
+    LFSuperUserAccessKeyId:
+      Description: LF Super User Access Key ID
+      Value: !Ref LFSuperUserAccessKey
+
+    LFSuperUserSecretAccessKey:
+      Description: LF Super User Secret Access Key
+      Value: !GetAtt LFSuperUserAccessKey.SecretAccessKey

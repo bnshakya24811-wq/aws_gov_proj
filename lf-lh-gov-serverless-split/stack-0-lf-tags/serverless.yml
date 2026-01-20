@@ -1,0 +1,43 @@
+service: lf-lh-stack-0-lf-tags-o-sp
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: ${self:service}-${self:provider.stage}
+
+resources:
+  Resources:
+    DBAccessScopeTag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: DBAccessScope-o-sp2
+        TagValues:
+          - silver-o-sp2
+          - gold-o-sp2
+
+    PIITag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: PII-o-sp2
+        TagValues:
+          - 'true'
+          - 'false'
+
+  Outputs:
+    DBAccessScopeTagKey:
+      Description: DBAccessScope Tag Key
+      Value: DBAccessScope-o-sp2
+      Export:
+        Name: ${self:provider.stackName}-DBAccessScopeTagKey
+
+    PIITagKey:
+      Description: PII Tag Key
+      Value: PII-o-sp2
+      Export:
+        Name: ${self:provider.stackName}-PIITagKey
