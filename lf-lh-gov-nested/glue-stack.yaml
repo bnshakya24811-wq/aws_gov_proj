@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Glue Stack - Glue Database, S3 Bucket, and Crawler
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  GlueCrawlerRoleArn:
+    Type: String
+    Description: ARN of the Glue Crawler IAM Role
+
+Resources:
+  # S3 Bucket
+  LFLHSilverBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub lf-lh-silver-bkt-o-sp5-${Environment}
+
+  # Glue Database
+  LFLHSilverDB:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub lf-lh-silver-db-o-sp5-${Environment}
+
+  # Glue Crawler
+  LFLHSilverCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub lf-lh-silver-crawler-o-sp5-${Environment}
+      Role: !Ref GlueCrawlerRoleArn
+      DatabaseName: !Ref LFLHSilverDB
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${LFLHSilverBucket}/
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      Configuration: |
+        {
+          "Version": 1.0,
+          "CrawlerOutput": {
+            "Partitions": {
+              "AddOrUpdateBehavior": "InheritFromTable"
+            },
+            "Tables": {
+              "AddOrUpdateBehavior": "MergeNewColumns"
+            }
+          },
+          "Grouping": {
+            "TableLevelConfiguration": 1
+          }
+        }
+
+Outputs:
+  DatabaseName:
+    Description: Name of the Glue Database
+    Value: !Ref LFLHSilverDB
+    Export:
+      Name: !Sub ${AWS::StackName}-DatabaseName
+
+  BucketName:
+    Description: Name of the S3 Bucket
+    Value: !Ref LFLHSilverBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-BucketName
+
+  CrawlerName:
+    Description: Name of the Glue Crawler
+    Value: !Ref LFLHSilverCrawler
+    Export:
+      Name: !Sub ${AWS::StackName}-CrawlerName

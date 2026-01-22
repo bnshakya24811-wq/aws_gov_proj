@@ -1,0 +1,105 @@
+service: lf-lh-stack-2-security-gov-o-sp6
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+  # No stage parameter - this is account-level deployment
+  stackName: lf-lh-stack-2-security-gov-o-sp6
+
+custom:
+  # Common S3 bucket for nested templates (account-level)
+  nestedTemplatesBucket: lf-nested-templates-o-sp6
+
+resources:
+  Parameters:
+    # Environment parameter to specify which env-level nested stacks to create
+    Environment:
+      Type: String
+      Default: dev
+      AllowedValues:
+        - dev
+        - staging
+        - uat
+        - prod
+      Description: Environment name for nested stack deployment
+
+  Resources:
+    # S3 Bucket for nested stack templates (account-level, created once)
+    NestedTemplatesBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.nestedTemplatesBucket}
+
+    # Nested Stack 1: LF Tags (account-level, created once)
+    LFTagsNestedStack:
+      Type: AWS::CloudFormation::Stack
+      DependsOn: NestedTemplatesBucket
+      Properties:
+        TemplateURL: !Sub https://${self:custom.nestedTemplatesBucket}.s3.amazonaws.com/nested/lf-tags-stack.yaml
+        TimeoutInMinutes: 10
+
+    # Nested Stack 2: Tag Associations (environment-specific)
+    TagAssociationsNestedStack:
+      Type: AWS::CloudFormation::Stack
+      DependsOn: LFTagsNestedStack
+      Properties:
+        TemplateURL: !Sub https://${self:custom.nestedTemplatesBucket}.s3.amazonaws.com/nested/tag-associations-stack.yaml
+        Parameters:
+          Environment: !Ref Environment
+          DatabaseName: !Sub '{{resolve:ssm:/lf-lh/${Environment}/resources/database-name}}'
+        TimeoutInMinutes: 10
+
+    # Nested Stack 3: Permissions (environment-specific)
+    PermissionsNestedStack:
+      Type: AWS::CloudFormation::Stack
+      DependsOn: TagAssociationsNestedStack
+      Properties:
+        TemplateURL: !Sub https://${self:custom.nestedTemplatesBucket}.s3.amazonaws.com/nested/permissions-stack.yaml
+        Parameters:
+          Environment: !Ref Environment
+          LFDevUserArn: !Sub '{{resolve:ssm:/lf-lh/${Environment}/resources/lf-dev-user-arn}}'
+          LFSuperUserArn: !Sub '{{resolve:ssm:/lf-lh/${Environment}/resources/lf-super-user-arn}}'
+          GlueCrawlerRoleArn: !Sub '{{resolve:ssm:/lf-lh/${Environment}/resources/glue-crawler-role-arn}}'
+          GlueJobRoleArn: !Sub '{{resolve:ssm:/lf-lh/${Environment}/resources/glue-job-role-arn}}'
+        TimeoutInMinutes: 15
+
+  Outputs:
+    Environment:
+      Description: Environment deployed
+      Value: !Ref Environment
+
+    NestedTemplatesBucket:
+      Description: Bucket containing nested stack templates
+      Value: !Ref NestedTemplatesBucket
+
+    LFTagsStackId:
+      Description: LF Tags Nested Stack ID (account-level)
+      Value: !Ref LFTagsNestedStack
+
+    TagAssociationsStackId:
+      Description: Tag Associations Nested Stack ID (environment-level)
+      Value: !Ref TagAssociationsNestedStack
+      Export:
+        Name: !Sub lf-lh-stack-2-security-gov-o-sp6-TagAssociationsStackId-${Environment}
+
+    PermissionsStackId:
+      Description: Permissions Nested Stack ID (environment-level)
+      Value: !Ref PermissionsNestedStack
+      Export:
+        Name: !Sub lf-lh-stack-2-security-gov-o-sp6-PermissionsStackId-${Environment}
+
+    DBAccessScopeTagKey:
+      Description: DBAccessScope Tag Key
+      Value: !GetAtt LFTagsNestedStack.Outputs.DBAccessScopeTagKey
+
+    PIITagKey:
+      Description: PII Tag Key
+      Value: !GetAtt LFTagsNestedStack.Outputs.PIITagKey
+
+    TagAssociationStatus:
+      Description: Tag Association Status
+      Value: !GetAtt TagAssociationsNestedStack.Outputs.TagAssociationStatus
+
+    PermissionsConfigured:
+      Description: Permissions Configuration Status
+      Value: !GetAtt PermissionsNestedStack.Outputs.PermissionsConfigured

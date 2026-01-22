@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Permissions Nested Stack - Lake Formation permissions for users and roles (environment-specific)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, uat, prod)
+  
+  LFDevUserArn:
+    Type: String
+    Description: ARN of the Dev User
+  
+  LFSuperUserArn:
+    Type: String
+    Description: ARN of the Super User
+  
+  GlueCrawlerRoleArn:
+    Type: String
+    Description: ARN of the Glue Crawler Role
+  
+  GlueJobRoleArn:
+    Type: String
+    Description: ARN of the Glue Job Role
+
+Resources:
+  # Super User Permissions - Database Level
+  LFSuperUserLFGrantDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Super User Permissions - Table Level
+  LFSuperUserLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Dev User Permissions - Database Describe
+  LFDevUserLFGrantDBDescribe:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - DESCRIBE
+      PermissionsWithGrantOption: []
+
+  # Dev User Permissions - Table Level (non-PII only)
+  LFDevUserLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+            - TagKey: PII-o-sp6
+              TagValues:
+                - 'false'
+      Permissions:
+        - DESCRIBE
+        - SELECT
+      PermissionsWithGrantOption: []
+
+  # Glue Crawler Role Permissions - Database Level
+  GlueCrawlerRoleLFGrantDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueCrawlerRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Crawler Role Permissions - Table Level
+  GlueCrawlerRoleLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueCrawlerRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Job Role - LF Tag ASSOCIATE Permission for DBAccessScope
+  LFTagPermissionForGlueJobRoleDBAccessScope:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: DBAccessScope-o-sp6
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE"
+
+  # Glue Job Role - LF Tag ASSOCIATE Permission for PII
+  LFTagPermissionForGlueJobRolePII:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: PII-o-sp6
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE"
+
+  # Glue Job Role Permissions - Database Level
+  GlueJobRoleLFGrantDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Job Role Permissions - Table Level (all PII)
+  GlueJobRoleLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: DBAccessScope-o-sp6
+              TagValues:
+                - silver
+            - TagKey: PII-o-sp6
+              TagValues:
+                - '*'
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+Outputs:
+  Environment:
+    Description: Environment for these permissions
+    Value: !Ref Environment
+
+  PermissionsConfigured:
+    Description: Confirmation that all permissions are configured
+    Value: Complete

@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master Stack - Orchestrates IAM, Glue, and Governance nested stacks
+
+Parameters:
+  TemplateS3Bucket:
+    Type: String
+    Description: S3 bucket containing nested stack templates
+    Default: your-cloudformation-templates-bucket
+  
+  TemplateS3Prefix:
+    Type: String
+    Description: S3 prefix/folder for nested stack templates
+    Default: lf-nested-stacks
+  
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Resources:
+  # Stack 1: IAM Stack (creates users, roles, policies)
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/iam-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: IAM
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 2: Glue Stack (creates database, bucket, crawler)
+  # Depends on IAM stack for GlueCrawlerRole
+  GlueStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: IAMStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/glue-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        GlueCrawlerRoleArn: !GetAtt IAMStack.Outputs.GlueCrawlerRoleArn
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: Glue
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 3: Governance Stack (creates LF tags and permissions)
+  # Depends on both IAM and Glue stacks
+  GovernanceStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - IAMStack
+      - GlueStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/governance-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        DatabaseName: !GetAtt GlueStack.Outputs.DatabaseName
+        LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserArn
+        LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserArn
+        GlueCrawlerRoleArn: !GetAtt IAMStack.Outputs.GlueCrawlerRoleArn
+        GlueJobRoleArn: !GetAtt IAMStack.Outputs.GlueJobRoleArn
+      TimeoutInMinutes: 15
+      Tags:
+        - Key: StackType
+          Value: Governance
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  # IAM Outputs
+  LFDevUserArn:
+    Description: ARN of the Dev User
+    Value: !GetAtt IAMStack.Outputs.LFDevUserArn
+
+  LFSuperUserArn:
+    Description: ARN of the Super User
+    Value: !GetAtt IAMStack.Outputs.LFSuperUserArn
+
+  LFDevUserAccessKeyId:
+    Description: Access Key ID for Dev User
+    Value: !GetAtt IAMStack.Outputs.LFDevUserAccessKeyId
+
+  LFDevUserSecretAccessKey:
+    Description: Secret Access Key for Dev User (SENSITIVE)
+    Value: !GetAtt IAMStack.Outputs.LFDevUserSecretAccessKey
+
+  LFSuperUserAccessKeyId:
+    Description: Access Key ID for Super User
+    Value: !GetAtt IAMStack.Outputs.LFSuperUserAccessKeyId
+
+  LFSuperUserSecretAccessKey:
+    Description: Secret Access Key for Super User (SENSITIVE)
+    Value: !GetAtt IAMStack.Outputs.LFSuperUserSecretAccessKey
+
+  GlueCrawlerRoleArn:
+    Description: ARN of the Glue Crawler Role
+    Value: !GetAtt IAMStack.Outputs.GlueCrawlerRoleArn
+
+  GlueJobRoleArn:
+    Description: ARN of the Glue Job Role
+    Value: !GetAtt IAMStack.Outputs.GlueJobRoleArn
+
+  # Glue Outputs
+  DatabaseName:
+    Description: Name of the Glue Database
+    Value: !GetAtt GlueStack.Outputs.DatabaseName
+
+  BucketName:
+    Description: Name of the S3 Bucket
+    Value: !GetAtt GlueStack.Outputs.BucketName
+
+  CrawlerName:
+    Description: Name of the Glue Crawler
+    Value: !GetAtt GlueStack.Outputs.CrawlerName
+
+  # Governance Outputs
+  DBAccessScopeTagKey:
+    Description: DBAccessScope Tag Key
+    Value: !GetAtt GovernanceStack.Outputs.DBAccessScopeTagKey
+
+  PIITagKey:
+    Description: PII Tag Key
+    Value: !GetAtt GovernanceStack.Outputs.PIITagKey
+
+  # Stack References
+  IAMStackId:
+    Description: IAM Stack ID
+    Value: !Ref IAMStack
+
+  GlueStackId:
+    Description: Glue Stack ID
+    Value: !Ref GlueStack
+
+  GovernanceStackId:
+    Description: Governance Stack ID
+    Value: !Ref GovernanceStack

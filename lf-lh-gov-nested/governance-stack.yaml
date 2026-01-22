@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Governance Stack - Lake Formation Tags, Tag Associations, and Permissions
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue Database
+  
+  LFDevUserArn:
+    Type: String
+    Description: ARN of the Dev User
+  
+  LFSuperUserArn:
+    Type: String
+    Description: ARN of the Super User
+  
+  GlueCrawlerRoleArn:
+    Type: String
+    Description: ARN of the Glue Crawler Role
+  
+  GlueJobRoleArn:
+    Type: String
+    Description: ARN of the Glue Job Role
+
+Resources:
+  # Lake Formation Tags (environment-specific with env suffix)
+  DBAccessScopeTag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+      TagValues:
+        - silver
+        - gold
+
+  PIITag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: !Sub PII-o-sp6-${Environment}
+      TagValues:
+        - 'true'
+        - 'false'
+
+  # Tag Associations
+  LFLHSilverDBTagAssociation:
+    Type: AWS::LakeFormation::TagAssociation
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Resource:
+        Database:
+          CatalogId: !Ref AWS::AccountId
+          Name: !Ref DatabaseName
+      LFTags:
+        - CatalogId: !Ref AWS::AccountId
+          TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+          TagValues:
+            - silver
+
+  # Super User Permissions - Database Level
+  LFSuperUserLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Super User Permissions - Table Level
+  LFSuperUserLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+      - PIITag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+            - TagKey: !Sub PII-o-sp6-${Environment}
+              TagValues:
+                - '*'
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Dev User Permissions - Database Describe
+  LFDevUserLFGrantDBDescribe:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - DESCRIBE
+      PermissionsWithGrantOption: []
+
+  # Dev User Permissions - Table Level (non-PII only)
+  LFDevUserLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+      - PIITag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+            - TagKey: !Sub PII-o-sp6-${Environment}
+              TagValues:
+                - 'false'
+      Permissions:
+        - DESCRIBE
+        - SELECT
+      PermissionsWithGrantOption: []
+
+  # Glue Crawler Role Permissions - Database Level
+  GlueCrawlerRoleLFGrantDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueCrawlerRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Crawler Role Permissions - Table Level
+  GlueCrawlerRoleLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueCrawlerRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Job Role - LF Tag ASSOCIATE Permission for DBAccessScope
+  LFTagPermissionForGlueJobRole:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE"
+
+  # Glue Job Role - LF Tag ASSOCIATE Permission for PII
+  LFTagPermissionForGlueJobRolePII:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - PIITag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTag:
+          CatalogId: !Ref AWS::AccountId
+          TagKey: !Sub PII-o-sp6-${Environment}
+          TagValues:
+            - "*"
+      Permissions:
+        - "ASSOCIATE"
+      PermissionsWithGrantOption:
+        - "ASSOCIATE"
+
+  # Glue Job Role Permissions - Database Level
+  GlueJobRoleLFGrantDBAccessScopeSilverDB:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Glue Job Role Permissions - Table Level (all PII)
+  GlueJobRoleLFGrantDBAccessScopeSilverTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn:
+      - DBAccessScopeTag
+      - PIITag
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref GlueJobRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp6-${Environment}
+              TagValues:
+                - silver
+            - TagKey: !Sub PII-o-sp6-${Environment}
+              TagValues:
+                - '*'
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+Outputs:
+  DBAccessScopeTagKey:
+    Description: DBAccessScope Tag Key
+    Value: !Sub DBAccessScope-o-sp6-${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-DBAccessScopeTagKey
+
+  PIITagKey:
+    Description: PII Tag Key
+    Value: !Sub PII-o-sp6-${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-PIITagKey

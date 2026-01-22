@@ -1,0 +1,252 @@
+service: lf-lh-stack-1-resources-o-sp6
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: lf-lh-stack-1-resources-o-sp6-${self:provider.stage}
+
+custom:
+  ssmBasePath: /lf-lh/${self:provider.stage}
+  bucketName: lf-lh-silver-bkt-o-sp6-${self:provider.stage}
+  databaseName: lf-lh-silver-db-o-sp6-${self:provider.stage}
+
+resources:
+  Resources:
+    # S3 Bucket
+    LFLHSilverBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+
+    # Glue Database
+    LFLHSilverDB:
+      Type: AWS::Glue::Database
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        DatabaseInput:
+          Name: ${self:custom.databaseName}
+
+    # IAM Users
+    LFDevUser:
+      Type: AWS::IAM::User
+      Properties:
+        UserName: lf-lh-dev-user-o-sp6-${self:provider.stage}
+
+    LFSuperUser:
+      Type: AWS::IAM::User
+      Properties:
+        UserName: lf-lh-super-user-o-sp6-${self:provider.stage}
+
+    # Access Keys
+    LFDevUserAccessKey:
+      Type: AWS::IAM::AccessKey
+      Properties:
+        UserName: !Ref LFDevUser
+
+    LFSuperUserAccessKey:
+      Type: AWS::IAM::AccessKey
+      Properties:
+        UserName: !Ref LFSuperUser
+
+    # IAM Policies for Users
+    LFDevUserPolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: lf-lh-dev-user-policy-o-sp6-${self:provider.stage}
+        Users:
+          - !Ref LFDevUser
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: 's3:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'glue:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'athena:*'
+              Resource: '*'
+
+    LFSuperUserPolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: lf-lh-super-user-policy-o-sp6-${self:provider.stage}
+        Users:
+          - !Ref LFSuperUser
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: 's3:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'glue:*'
+              Resource: '*'
+            - Effect: Allow
+              Action: 'athena:*'
+              Resource: '*'
+
+    # Glue Crawler Role
+    GlueCrawlerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: lf-lh-glue-crawler-role-o-sp6-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: GlueCrawlerAccess-o-sp6-${self:provider.stage}
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub arn:aws:s3:::${self:custom.bucketName}
+                    - !Sub arn:aws:s3:::${self:custom.bucketName}/*
+                - Effect: Allow
+                  Action: 'glue:*'
+                  Resource: '*'
+                - Effect: Allow
+                  Action: 'lakeformation:GetDataAccess'
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*
+
+    # Glue Job Role
+    GlueJobRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: lf-lh-glue-job-role-o-sp6-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+          - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        Policies:
+          - PolicyName: LakeFormationTagging-o-sp6-${self:provider.stage}
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - lakeformation:AddLFTagsToResource
+                    - lakeformation:RemoveLFTagsFromResource
+                    - lakeformation:GetResourceLFTags
+                    - lakeformation:ListLFTags
+                    - lakeformation:GetLFTag
+                    - glue:GetDatabase
+                    - glue:GetTable
+                    - glue:GetTables
+                    - glue:GetDatabases
+                    - glue:GetPartition
+                    - glue:GetPartitions
+                  Resource: '*'
+
+    # Glue Crawler
+    LFLHSilverCrawler:
+      Type: AWS::Glue::Crawler
+      Properties:
+        Name: lf-lh-silver-crawler-o-sp6-${self:provider.stage}
+        Role: !GetAtt GlueCrawlerRole.Arn
+        DatabaseName: !Ref LFLHSilverDB
+        Targets:
+          S3Targets:
+            - Path: !Sub s3://${LFLHSilverBucket}/
+        SchemaChangePolicy:
+          UpdateBehavior: UPDATE_IN_DATABASE
+          DeleteBehavior: LOG
+        RecrawlPolicy:
+          RecrawlBehavior: CRAWL_EVERYTHING
+
+    # SSM Parameters for cross-stack reference
+    DatabaseNameSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/database-name
+        Type: String
+        Value: !Ref LFLHSilverDB
+
+    BucketNameSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/bucket-name
+        Type: String
+        Value: !Ref LFLHSilverBucket
+
+    LFDevUserArnSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/lf-dev-user-arn
+        Type: String
+        Value: !GetAtt LFDevUser.Arn
+
+    LFSuperUserArnSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/lf-super-user-arn
+        Type: String
+        Value: !GetAtt LFSuperUser.Arn
+
+    GlueCrawlerRoleArnSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/glue-crawler-role-arn
+        Type: String
+        Value: !GetAtt GlueCrawlerRole.Arn
+
+    GlueJobRoleArnSSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/resources/glue-job-role-arn
+        Type: String
+        Value: !GetAtt GlueJobRole.Arn
+
+  Outputs:
+    DatabaseName:
+      Value: !Ref LFLHSilverDB
+    
+    BucketName:
+      Value: !Ref LFLHSilverBucket
+    
+    LFDevUserArn:
+      Value: !GetAtt LFDevUser.Arn
+    
+    LFSuperUserArn:
+      Value: !GetAtt LFSuperUser.Arn
+    
+    GlueCrawlerRoleArn:
+      Value: !GetAtt GlueCrawlerRole.Arn
+    
+    GlueJobRoleArn:
+      Value: !GetAtt GlueJobRole.Arn
+
+    LFDevUserAccessKeyId:
+      Value: !Ref LFDevUserAccessKey
+    
+    LFDevUserSecretAccessKey:
+      Value: !GetAtt LFDevUserAccessKey.SecretAccessKey
+    
+    LFSuperUserAccessKeyId:
+      Value: !Ref LFSuperUserAccessKey
+    
+    LFSuperUserSecretAccessKey:
+      Value: !GetAtt LFSuperUserAccessKey.SecretAccessKey

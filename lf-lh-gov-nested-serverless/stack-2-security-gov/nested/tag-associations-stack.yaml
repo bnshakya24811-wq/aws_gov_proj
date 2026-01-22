@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Tag Associations Nested Stack - Associates LF tags with database (environment-specific)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, uat, prod)
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue Database
+
+Resources:
+  # Tag Association - Database Level
+  LFLHSilverDBTagAssociation:
+    Type: AWS::LakeFormation::TagAssociation
+    Properties:
+      Resource:
+        Database:
+          CatalogId: !Ref AWS::AccountId
+          Name: !Ref DatabaseName
+      LFTags:
+        - CatalogId: !Ref AWS::AccountId
+          TagKey: DBAccessScope-o-sp6
+          TagValues:
+            - silver
+
+Outputs:
+  Environment:
+    Description: Environment for this tag association
+    Value: !Ref Environment
+
+  TagAssociationStatus:
+    Description: Status of tag association
+    Value: !Ref LFLHSilverDBTagAssociation

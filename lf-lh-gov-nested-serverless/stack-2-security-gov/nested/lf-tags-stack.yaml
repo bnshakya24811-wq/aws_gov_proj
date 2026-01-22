@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: LF Tags Nested Stack - Creates Lake Formation tags (environment-agnostic)
+
+Resources:
+  # Lake Formation Tags (shared across all environments with o-sp6 suffix)
+  DBAccessScopeTag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: DBAccessScope-o-sp6
+      TagValues:
+        - silver
+        - gold
+
+  PIITag:
+    Type: AWS::LakeFormation::Tag
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      TagKey: PII-o-sp6
+      TagValues:
+        - 'true'
+        - 'false'
+
+Outputs:
+  DBAccessScopeTagKey:
+    Description: DBAccessScope Tag Key
+    Value: DBAccessScope-o-sp6
+
+  PIITagKey:
+    Description: PII Tag Key
+    Value: PII-o-sp6

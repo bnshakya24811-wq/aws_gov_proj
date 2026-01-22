@@ -1,0 +1,66 @@
+service: lf-lh-stack-2-permissions-o-sp6
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: lf-lh-stack-2-permissions-o-sp6-${self:provider.stage}
+
+custom:
+  ssmBasePath: /lf-lh/${self:provider.stage}
+  nestedTemplatesBucket: lf-nested-templates-o-sp6-${self:provider.stage}
+
+resources:
+  Resources:
+    # S3 Bucket for nested stack templates
+    NestedTemplatesBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.nestedTemplatesBucket}
+
+    # Nested Stack 1: Tag Associations
+    TagAssociationsNestedStack:
+      Type: AWS::CloudFormation::Stack
+      DependsOn: NestedTemplatesBucket
+      Properties:
+        TemplateURL: !Sub https://${self:custom.nestedTemplatesBucket}.s3.amazonaws.com/nested/tag-associations-stack.yaml
+        Parameters:
+          DatabaseName: ${ssm:${self:custom.ssmBasePath}/resources/database-name}
+          DBAccessScopeTagKey: ${ssm:${self:custom.ssmBasePath}/tags/db-access-scope-tag-key}
+        TimeoutInMinutes: 10
+
+    # Nested Stack 2: Permissions
+    PermissionsNestedStack:
+      Type: AWS::CloudFormation::Stack
+      DependsOn: TagAssociationsNestedStack
+      Properties:
+        TemplateURL: !Sub https://${self:custom.nestedTemplatesBucket}.s3.amazonaws.com/nested/permissions-stack.yaml
+        Parameters:
+          LFDevUserArn: ${ssm:${self:custom.ssmBasePath}/resources/lf-dev-user-arn}
+          LFSuperUserArn: ${ssm:${self:custom.ssmBasePath}/resources/lf-super-user-arn}
+          GlueCrawlerRoleArn: ${ssm:${self:custom.ssmBasePath}/resources/glue-crawler-role-arn}
+          GlueJobRoleArn: ${ssm:${self:custom.ssmBasePath}/resources/glue-job-role-arn}
+          DBAccessScopeTagKey: ${ssm:${self:custom.ssmBasePath}/tags/db-access-scope-tag-key}
+          PIITagKey: ${ssm:${self:custom.ssmBasePath}/tags/pii-tag-key}
+        TimeoutInMinutes: 15
+
+  Outputs:
+    NestedTemplatesBucket:
+      Description: Bucket containing nested stack templates
+      Value: !Ref NestedTemplatesBucket
+
+    TagAssociationsStackId:
+      Description: Tag Associations Nested Stack ID
+      Value: !Ref TagAssociationsNestedStack
+
+    PermissionsStackId:
+      Description: Permissions Nested Stack ID
+      Value: !Ref PermissionsNestedStack
+
+    TagAssociationStatus:
+      Description: Tag Association Status
+      Value: !GetAtt TagAssociationsNestedStack.Outputs.TagAssociationStatus
+
+    PermissionsConfigured:
+      Description: Permissions Configuration Status
+      Value: !GetAtt PermissionsNestedStack.Outputs.PermissionsConfigured

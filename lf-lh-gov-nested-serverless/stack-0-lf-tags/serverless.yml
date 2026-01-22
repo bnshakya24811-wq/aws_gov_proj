@@ -1,0 +1,57 @@
+service: lf-lh-stack-0-lf-tags-o-sp6
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+  stackName: lf-lh-stack-0-lf-tags-o-sp6-${self:provider.stage}
+
+custom:
+  ssmBasePath: /lf-lh/${self:provider.stage}
+
+resources:
+  Resources:
+    # Lake Formation Tags (environment-agnostic with o-sp6 suffix)
+    DBAccessScopeTag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: DBAccessScope-o-sp6
+        TagValues:
+          - silver
+          - gold
+
+    PIITag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: PII-o-sp6
+        TagValues:
+          - 'true'
+          - 'false'
+
+    # SSM Parameters for cross-stack reference
+    DBAccessScopeTagKeySSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/tags/db-access-scope-tag-key
+        Type: String
+        Value: DBAccessScope-o-sp6
+        Description: Lake Formation DBAccessScope tag key
+
+    PIITagKeySSM:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmBasePath}/tags/pii-tag-key
+        Type: String
+        Value: PII-o-sp6
+        Description: Lake Formation PII tag key
+
+  Outputs:
+    DBAccessScopeTagKey:
+      Description: DBAccessScope Tag Key
+      Value: DBAccessScope-o-sp6
+
+    PIITagKey:
+      Description: PII Tag Key
+      Value: PII-o-sp6
