@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Stack - API Gateway with API Key authentication for Athena queries
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  LambdaFunctionArn:
+    Type: String
+    Description: ARN of the Lambda function to invoke
+  
+  OAuthLambdaFunctionArn:
+    Type: String
+    Description: ARN of the OAuth Lambda function
+    Default: ""
+
+Conditions:
+  HasOAuthLambda: !Not [!Equals [!Ref OAuthLambdaFunctionArn, ""]]
+
+Resources:
+  # REST API
+  AthenaQueryAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub lf-athena-query-api-o-sp6-${Environment}
+      Description: API Gateway for querying Athena with Lake Formation permissions
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      ApiKeySourceType: HEADER
+
+  # API Resource (/query)
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ParentId: !GetAtt AthenaQueryAPI.RootResourceId
+      PathPart: query
+
+  # POST Method with API Key (original)
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.header.x-api-key: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  # POST Method with IAM Auth (new - separate resource path)
+  QueryIAMResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ParentId: !GetAtt AthenaQueryAPI.RootResourceId
+      PathPart: query-iam
+
+  QueryIAMMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryIAMResource
+      HttpMethod: POST
+      AuthorizationType: AWS_IAM
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+
+  # ==========================================
+  # OAuth 2.0 Route (/query-oauth)
+  # ==========================================
+  
+  QueryOAuthResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: HasOAuthLambda
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ParentId: !GetAtt AthenaQueryAPI.RootResourceId
+      PathPart: query-oauth
+
+  QueryOAuthMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: HasOAuthLambda
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryOAuthResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OAuthLambdaFunctionArn}/invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # CORS Preflight for OAuth endpoint
+  QueryOAuthOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: HasOAuthLambda
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryOAuthResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # Deployment
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - QueryIAMMethod
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      StageName: !Ref Environment
+
+  # Usage Plan
+  APIUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - APIDeployment
+    Properties:
+      UsagePlanName: !Sub lf-athena-usage-plan-o-sp6-${Environment}
+      Description: Usage plan for Athena query API
+      ApiStages:
+        - ApiId: !Ref AthenaQueryAPI
+          Stage: !Ref Environment
+      Throttle:
+        BurstLimit: 100
+        RateLimit: 50
+      Quota:
+        Limit: 10000
+        Period: DAY
+
+  # API Key for Dev User
+  DevUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-dev-user-api-key-o-sp6-${Environment}
+      Description: API Key for Dev User with limited LF permissions
+      Enabled: true
+
+  # API Key for Super User
+  SuperUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-super-user-api-key-o-sp6-${Environment}
+      Description: API Key for Super User with full LF permissions
+      Enabled: true
+
+  # Associate Dev User API Key with Usage Plan
+  DevUserUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DevUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref APIUsagePlan
+
+  # Associate Super User API Key with Usage Plan
+  SuperUserUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SuperUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref APIUsagePlan
+
+  # Lambda Permission for API Gateway
+  APIGatewayInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*
+
+  # Lambda Permission for OAuth endpoint
+  APIGatewayInvokeOAuthLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasOAuthLambda
+    Properties:
+      FunctionName: !Ref OAuthLambdaFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL (API Key auth)
+    Value: !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+
+  APIEndpointIAM:
+    Description: API Gateway endpoint URL (IAM auth)
+    Value: !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-iam
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpointIAM
+
+  APIEndpointOAuth:
+    Description: API Gateway endpoint URL (OAuth/Cognito auth)
+    Value: !If 
+      - HasOAuthLambda
+      - !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-oauth
+      - "OAuth endpoint not configured"
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpointOAuth
+
+  APIId:
+    Description: API Gateway ID
+    Value: !Ref AthenaQueryAPI
+    Export:
+      Name: !Sub ${AWS::StackName}-APIId
+
+  DevUserAPIKeyId:
+    Description: API Key ID for Dev User
+    Value: !Ref DevUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-DevUserAPIKeyId
+
+  SuperUserAPIKeyId:
+    Description: API Key ID for Super User
+    Value: !Ref SuperUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-SuperUserAPIKeyId

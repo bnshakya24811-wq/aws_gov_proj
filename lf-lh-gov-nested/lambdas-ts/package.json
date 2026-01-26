@@ -1,0 +1,22 @@
+{
+  "name": "lf-athena-query-lambda",
+  "version": "1.0.0",
+  "description": "Lambda handler for Athena queries with Lake Formation TBAC",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "package": "npm run build && cd dist && zip -r ../lambda.zip .",
+    "clean": "rm -rf dist lambda.zip"
+  },
+  "dependencies": {
+    "@aws-sdk/client-athena": "^3.515.0",
+    "@aws-sdk/client-dynamodb": "^3.515.0",
+    "@aws-sdk/client-sts": "^3.515.0",
+    "@aws-sdk/lib-dynamodb": "^3.515.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.133",
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cognito Stack - User Pool for OAuth 2.0 authentication
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+
+Resources:
+  # Cognito User Pool
+  AthenaQueryUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub lf-athena-oauth-pool-o-sp6-${Environment}
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      UsernameConfiguration:
+        CaseSensitive: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 7
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: lf_role
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserPoolTags:
+        Project: LakeFormationAccessControl
+        Environment: !Ref Environment
+
+  # App Client for OAuth authentication
+  AthenaQueryAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub lf-athena-oauth-client-o-sp6-${Environment}
+      UserPoolId: !Ref AthenaQueryUserPool
+      GenerateSecret: true
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 1  # 1 hour
+      IdTokenValidity: 1      # 1 hour
+      RefreshTokenValidity: 30  # 30 days
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+      ReadAttributes:
+        - email
+        - email_verified
+        - custom:lf_role
+      WriteAttributes:
+        - email
+        - custom:lf_role
+
+  # User Group: Developers (maps to LF Dev User role)
+  DevelopersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Developers
+      Description: Developers with limited Lake Formation permissions
+      UserPoolId: !Ref AthenaQueryUserPool
+      Precedence: 2
+
+  # User Group: Analysts (maps to LF Dev User role)
+  AnalystsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Analysts
+      Description: Data Analysts with read-only Lake Formation permissions
+      UserPoolId: !Ref AthenaQueryUserPool
+      Precedence: 3
+
+  # User Group: Admins (maps to LF Super User role)
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Admins
+      Description: Administrators with full Lake Formation permissions
+      UserPoolId: !Ref AthenaQueryUserPool
+      Precedence: 1
+
+  # User Group: Data Scientists
+  DataScientistsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: DataScientists
+      Description: Data Scientists with developer-level permissions
+      UserPoolId: !Ref AthenaQueryUserPool
+      Precedence: 2
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref AthenaQueryUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt AthenaQueryUserPool.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolArn
+
+  AppClientId:
+    Description: Cognito App Client ID
+    Value: !Ref AthenaQueryAppClient
+    Export:
+      Name: !Sub ${AWS::StackName}-AppClientId
+
+  DevelopersGroupName:
+    Description: Developers group name
+    Value: !Ref DevelopersGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-DevelopersGroup
+
+  AdminsGroupName:
+    Description: Admins group name
+    Value: !Ref AdminsGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-AdminsGroup

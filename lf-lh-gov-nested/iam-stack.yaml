@@ -49,6 +49,9 @@ Resources:
           - Effect: Allow
             Action: 'athena:*'
             Resource: '*'
+          - Effect: Allow
+            Action: 'execute-api:Invoke'
+            Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*'
 
   LFSuperUserPolicy:
     Type: AWS::IAM::Policy
@@ -68,6 +71,9 @@ Resources:
           - Effect: Allow
             Action: 'athena:*'
             Resource: '*'
+          - Effect: Allow
+            Action: 'execute-api:Invoke'
+            Resource: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*'
 
   # Glue Crawler Role
   GlueCrawlerRole:
@@ -154,6 +160,72 @@ Resources:
                   - glue:GetPartitions
                 Resource: '*'
 
+  # Dev User Role (assumable by Lambda)
+  LFDevUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-lh-dev-user-role-o-sp6-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-query-lambda-role-o-sp6-${Environment}
+      Policies:
+        - PolicyName: !Sub lf-lh-dev-user-athena-access-o-sp6-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'glue:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'athena:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'lakeformation:GetDataAccess'
+                Resource: '*'
+
+  # Super User Role (assumable by Lambda)
+  LFSuperUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-lh-super-user-role-o-sp6-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn: !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-query-lambda-role-o-sp6-${Environment}
+      Policies:
+        - PolicyName: !Sub lf-lh-super-user-athena-access-o-sp6-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'glue:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'athena:*'
+                Resource: '*'
+              - Effect: Allow
+                Action: 'lakeformation:GetDataAccess'
+                Resource: '*'
+
 Outputs:
   LFDevUserArn:
     Description: ARN of the Dev User
@@ -166,6 +238,18 @@ Outputs:
     Value: !GetAtt LFSuperUser.Arn
     Export:
       Name: !Sub ${AWS::StackName}-LFSuperUserArn
+
+  LFDevUserRoleArn:
+    Description: ARN of the Dev User Role (for Lambda to assume)
+    Value: !GetAtt LFDevUserRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LFDevUserRoleArn
+
+  LFSuperUserRoleArn:
+    Description: ARN of the Super User Role (for Lambda to assume)
+    Value: !GetAtt LFSuperUserRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LFSuperUserRoleArn
 
   GlueCrawlerRoleArn:
     Description: ARN of the Glue Crawler Role

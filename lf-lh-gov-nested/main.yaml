@@ -5,12 +5,17 @@ Parameters:
   TemplateS3Bucket:
     Type: String
     Description: S3 bucket containing nested stack templates
-    Default: your-cloudformation-templates-bucket
+    Default: deploymen-bkt
   
   TemplateS3Prefix:
     Type: String
     Description: S3 prefix/folder for nested stack templates
     Default: lf-nested-stacks
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment packages
+    Default: deploymen-bkt
   
   Environment:
     Type: String
@@ -20,6 +25,17 @@ Parameters:
       - dev
       - staging
       - prod
+  
+  EnableOAuth:
+    Type: String
+    Description: Enable OAuth/Cognito authentication
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+Conditions:
+  EnableOAuthStack: !Equals [!Ref EnableOAuth, 'true']
 
 Resources:
   # Stack 1: IAM Stack (creates users, roles, policies)
@@ -71,12 +87,105 @@ Resources:
         DatabaseName: !GetAtt GlueStack.Outputs.DatabaseName
         LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserArn
         LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserArn
+        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
         GlueCrawlerRoleArn: !GetAtt IAMStack.Outputs.GlueCrawlerRoleArn
         GlueJobRoleArn: !GetAtt IAMStack.Outputs.GlueJobRoleArn
       TimeoutInMinutes: 15
       Tags:
         - Key: StackType
           Value: Governance
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 4: Cognito Stack (optional - for OAuth authentication)
+  CognitoStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableOAuthStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/cognito-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: Cognito
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 5: Lambda Stack (creates Lambda function for Athena queries)
+  # Depends on IAM and Glue stacks
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - IAMStack
+      - GlueStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/lambda-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+        APIKeyMappingTableName: !Sub lf-api-key-mappings-o-sp6-${Environment}
+        DatabaseName: !GetAtt GlueStack.Outputs.DatabaseName
+        LambdaCodeS3Bucket: !Ref LambdaCodeS3Bucket
+        LambdaCodeS3BucketRegion: !Ref AWS::Region
+        LambdaCodeS3Key: lambda/athena-query-handler.zip
+        CognitoUserPoolId: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.UserPoolId, ""]
+        CognitoAppClientId: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.AppClientId, ""]
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: Lambda
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 6: API Gateway Stack (creates REST API with API keys)
+  # Depends on Lambda stack
+  APIStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - LambdaStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/api-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LambdaFunctionArn: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
+        OAuthLambdaFunctionArn: !If [EnableOAuthStack, !GetAtt LambdaStack.Outputs.OAuthLambdaFunctionArn, ""]
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: API
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 7: DynamoDB Stack (creates API key mapping table)
+  # Depends on API stack to get API key IDs and IAM stack for user ARNs
+  DynamoDBStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - APIStack
+      - IAMStack
+    Properties:
+      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/dynamodb-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        DevUserAPIKeyId: !GetAtt APIStack.Outputs.DevUserAPIKeyId
+        SuperUserAPIKeyId: !GetAtt APIStack.Outputs.SuperUserAPIKeyId
+        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: DynamoDB
         - Key: Project
           Value: LakeFormationAccessControl
         - Key: Environment
@@ -138,6 +247,39 @@ Outputs:
     Description: PII Tag Key
     Value: !GetAtt GovernanceStack.Outputs.PIITagKey
 
+  # API Outputs
+  APIEndpoint:
+    Description: API Gateway endpoint URL for Athena queries
+    Value: !GetAtt APIStack.Outputs.APIEndpoint
+
+  APIEndpointIAM:
+    Description: API Gateway endpoint URL for IAM authenticated queries
+    Value: !GetAtt APIStack.Outputs.APIEndpointIAM
+
+  APIEndpointOAuth:
+    Description: API Gateway endpoint URL for OAuth authenticated queries
+    Value: !If [EnableOAuthStack, !GetAtt APIStack.Outputs.APIEndpointOAuth, "OAuth not enabled"]
+    Condition: EnableOAuthStack
+
+  DevUserAPIKey:
+    Description: Dev User API Key Value (SENSITIVE - use to query with limited permissions)
+    Value: !GetAtt DynamoDBStack.Outputs.DevUserAPIKeyValue
+
+  SuperUserAPIKey:
+    Description: Super User API Key Value (SENSITIVE - use to query with full permissions)
+    Value: !GetAtt DynamoDBStack.Outputs.SuperUserAPIKeyValue
+
+  # Cognito Outputs
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.UserPoolId, "OAuth not enabled"]
+    Condition: EnableOAuthStack
+
+  CognitoAppClientId:
+    Description: Cognito App Client ID
+    Value: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.AppClientId, "OAuth not enabled"]
+    Condition: EnableOAuthStack
+
   # Stack References
   IAMStackId:
     Description: IAM Stack ID
@@ -150,3 +292,20 @@ Outputs:
   GovernanceStackId:
     Description: Governance Stack ID
     Value: !Ref GovernanceStack
+
+  LambdaStackId:
+    Description: Lambda Stack ID
+    Value: !Ref LambdaStack
+
+  CognitoStackId:
+    Description: Cognito Stack ID
+    Value: !If [EnableOAuthStack, !Ref CognitoStack, "OAuth not enabled"]
+    Condition: EnableOAuthStack
+
+  APIStackId:
+    Description: API Stack ID
+    Value: !Ref APIStack
+
+  DynamoDBStackId:
+    Description: DynamoDB Stack ID
+    Value: !Ref DynamoDBStack

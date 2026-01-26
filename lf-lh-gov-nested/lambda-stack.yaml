@@ -1,0 +1,330 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda Stack - Lambda function for Athena queries with role assumption
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  LFDevUserArn:
+    Type: String
+    Description: ARN of the Dev User role to assume
+  
+  LFSuperUserArn:
+    Type: String
+    Description: ARN of the Super User role to assume
+  
+  APIKeyMappingTableName:
+    Type: String
+    Description: Name of DynamoDB table with API key to role mappings
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue Database
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+  
+  LambdaCodeS3BucketRegion:
+    Type: String
+    Description: AWS region where the Lambda code S3 bucket is located
+    Default: ap-southeast-2
+  
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/athena-query-handler.zip
+  
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID for OAuth authentication
+    Default: ""
+  
+  CognitoAppClientId:
+    Type: String
+    Description: Cognito App Client ID
+    Default: ""
+
+Conditions:
+  HasCognitoConfig: !Not [!Equals [!Ref CognitoUserPoolId, ""]]
+
+Resources:
+  # Lambda Execution Role
+  AthenaQueryLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-athena-query-lambda-role-o-sp6-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub AssumeUserRoles-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow assuming dev and super user roles
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevUserArn
+                  - !Ref LFSuperUserArn
+              # DynamoDB read access for API key lookup
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${APIKeyMappingTableName}
+              # Athena query execution (using Lambda's own role for metadata)
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              # S3 for Athena query results
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+              # Glue metadata access
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+
+  # Lambda Function
+  AthenaQueryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lf-athena-query-handler-o-sp6-${Environment}
+      Description: Lambda function to query Athena with LF permissions based on API key (TypeScript)
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt AthenaQueryLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+        S3ObjectVersion: !Ref AWS::NoValue
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          API_KEY_TABLE: !Ref APIKeyMappingTableName
+          DATABASE_NAME: !Ref DatabaseName
+          ATHENA_OUTPUT_BUCKET: !Sub s3://aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/
+          REGION: !Ref AWS::Region
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # CloudWatch Log Group
+  AthenaQueryFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/lf-athena-query-handler-o-sp6-${Environment}
+      RetentionInDays: 7
+
+  # ==========================================
+  # OAuth Lambda Function (Python)
+  # ==========================================
+  
+  OAuthLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: HasCognitoConfig
+    Properties:
+      RoleName: !Sub lf-oauth-query-lambda-role-o-sp6-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub OAuthCognitoAccess-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Cognito access for authentication
+              - Effect: Allow
+                Action:
+                  - cognito-idp:InitiateAuth
+                  - cognito-idp:GetUser
+                  - cognito-idp:AdminListGroupsForUser
+                Resource: !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
+              # STS AssumeRole for LF roles
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevUserArn
+                  - !Ref LFSuperUserArn
+              # Athena query execution
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              # S3 for Athena results
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+              # Glue metadata
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+
+  # OAuth Lambda Execution Role
+  OAuthLambdaRole:
+    Type: AWS::IAM::Role
+    Condition: HasCognitoConfig
+    Properties:
+      RoleName: !Sub lf-oauth-lambda-role-o-sp6-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub CognitoAccess-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Cognito User Pool access
+              - Effect: Allow
+                Action:
+                  - cognito-idp:InitiateAuth
+                  - cognito-idp:AdminInitiateAuth
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:GetUser
+                  - cognito-idp:ListGroups
+                  - cognito-idp:AdminListGroupsForUser
+                Resource:
+                  - !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}
+              # Secrets Manager for client secret
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:lf-cognito-client-secret-${Environment}-*
+              # Allow assuming LF roles
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevUserArn
+                  - !Ref LFSuperUserArn
+              # Athena query execution
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              # S3 for Athena query results
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+              # Glue access for metadata
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+
+  OAuthQueryFunction:
+    Type: AWS::Lambda::Function
+    Condition: HasCognitoConfig
+    Properties:
+      FunctionName: !Sub lf-oauth-query-handler-o-sp6-${Environment}
+      Description: OAuth 2.0 Proxy - Cognito authentication for Athena queries
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt OAuthLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: lambda/oauth-query-handler.zip
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          COGNITO_CLIENT_ID: !Ref CognitoAppClientId
+          COGNITO_CLIENT_SECRET: !Sub '{{resolve:secretsmanager:lf-cognito-client-secret-${Environment}:SecretString:client_secret}}'
+          DATABASE_NAME: !Ref DatabaseName
+          ATHENA_OUTPUT_BUCKET: !Sub aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+          REGION: !Ref AWS::Region
+          LF_DEV_ROLE_ARN: !Ref LFDevUserArn
+          LF_SUPER_ROLE_ARN: !Ref LFSuperUserArn
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  OAuthQueryFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: HasCognitoConfig
+    Properties:
+      LogGroupName: !Sub /aws/lambda/lf-oauth-query-handler-o-sp6-${Environment}
+      RetentionInDays: 7
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Athena Query Lambda function
+    Value: !GetAtt AthenaQueryFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+
+  LambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt AthenaQueryLambdaRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaRoleArn
+
+  OAuthLambdaFunctionArn:
+    Description: ARN of the OAuth Query Lambda function
+    Value: !If [HasCognitoConfig, !GetAtt OAuthQueryFunction.Arn, ""]
+    Export:
+      Name: !Sub ${AWS::StackName}-OAuthLambdaFunctionArn
+    Condition: HasCognitoConfig

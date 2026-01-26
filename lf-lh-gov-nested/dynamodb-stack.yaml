@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB Stack - API Key to IAM Role mapping table
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  DevUserAPIKeyId:
+    Type: String
+    Description: API Key ID for Dev User
+  
+  SuperUserAPIKeyId:
+    Type: String
+    Description: API Key ID for Super User
+  
+  LFDevUserRoleArn:
+    Type: String
+    Description: ARN of the Dev User Role
+  
+  LFSuperUserRoleArn:
+    Type: String
+    Description: ARN of the Super User Role
+
+Resources:
+  # DynamoDB Table for API Key Mappings
+  APIKeyMappingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub lf-api-key-mappings-o-sp6-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: apiKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: apiKey
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # Custom Resource to populate initial mappings
+  PopulateTableFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lf-populate-api-keys-o-sp6-${Environment}
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt PopulateTableFunctionRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import os
+          
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  dynamodb = boto3.resource('dynamodb')
+                  table = dynamodb.Table(event['ResourceProperties']['TableName'])
+                  
+                  # Get API keys from API Gateway
+                  apigateway = boto3.client('apigateway')
+                  
+                  dev_key_response = apigateway.get_api_key(
+                      apiKey=event['ResourceProperties']['DevUserAPIKeyId'],
+                      includeValue=True
+                  )
+                  
+                  super_key_response = apigateway.get_api_key(
+                      apiKey=event['ResourceProperties']['SuperUserAPIKeyId'],
+                      includeValue=True
+                  )
+                  
+                  # Store mappings
+                  table.put_item(Item={
+                      'apiKey': dev_key_response['value'],
+                      'roleArn': event['ResourceProperties']['DevUserRoleArn'],
+                      'userName': 'dev-user',
+                      'permissions': 'limited'
+                  })
+                  
+                  table.put_item(Item={
+                      'apiKey': super_key_response['value'],
+                      'roleArn': event['ResourceProperties']['SuperUserRoleArn'],
+                      'userName': 'super-user',
+                      'permissions': 'full'
+                  })
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'DevAPIKey': dev_key_response['value'],
+                      'SuperAPIKey': super_key_response['value']
+                  })
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  PopulateTableFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+
+  PopulateTableCustomResource:
+    Type: Custom::PopulateTable
+    DependsOn:
+      - APIKeyMappingTable
+    Properties:
+      ServiceToken: !GetAtt PopulateTableFunction.Arn
+      TableName: !Ref APIKeyMappingTable
+      DevUserAPIKeyId: !Ref DevUserAPIKeyId
+      SuperUserAPIKeyId: !Ref SuperUserAPIKeyId
+      DevUserRoleArn: !Ref LFDevUserRoleArn
+      SuperUserRoleArn: !Ref LFSuperUserRoleArn
+
+Outputs:
+  TableName:
+    Description: Name of the API Key mapping table
+    Value: !Ref APIKeyMappingTable
+    Export:
+      Name: !Sub ${AWS::StackName}-TableName
+
+  TableArn:
+    Description: ARN of the API Key mapping table
+    Value: !GetAtt APIKeyMappingTable.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-TableArn
+
+  DevUserAPIKeyValue:
+    Description: Dev User API Key Value (SENSITIVE)
+    Value: !GetAtt PopulateTableCustomResource.DevAPIKey
+
+  SuperUserAPIKeyValue:
+    Description: Super User API Key Value (SENSITIVE)
+    Value: !GetAtt PopulateTableCustomResource.SuperAPIKey
