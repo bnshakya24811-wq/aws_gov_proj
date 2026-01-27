@@ -1,0 +1,145 @@
+service: lf-lh-gov-sv-stack0
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+
+custom:
+  stackName: lf-lh-gov-sv-stack0-o-sv-tst1
+  stack1Name: lf-lh-gov-sv-stack1-o-sv-tst1
+  # Build SSM keys using mix of self: and hardcoded values
+  ssmPrefix: /gov-sv/${self:custom.stack1Name}/${self:provider.stage}
+  glueJobName: lf-lh-data-insert-job-o-sv-tst1-${self:provider.stage}
+  glueJobRoleName: lf-lh-glue-job-role-o-sv-tst1-${self:provider.stage}
+
+resources:
+  Resources:
+    # Glue Job Role
+    GlueJobRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.glueJobRoleName}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        Policies:
+          - PolicyName: GlueJobDataAccessPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                # S3 access using SSM to get bucket name
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub 
+                      - 'arn:aws:s3:::{{resolve:ssm:${SSMBucketKey}}}'
+                      - SSMBucketKey: ${self:custom.ssmPrefix}/bucket/silver/name
+                    - !Sub 
+                      - 'arn:aws:s3:::{{resolve:ssm:${SSMBucketKey}}}/*'
+                      - SSMBucketKey: ${self:custom.ssmPrefix}/bucket/silver/name
+                # Glue catalog access with complex ARN construction
+                - Effect: Allow
+                  Action:
+                    - glue:GetDatabase
+                    - glue:GetTable
+                    - glue:GetTables
+                    - glue:CreateTable
+                    - glue:UpdateTable
+                    - glue:BatchCreatePartition
+                    - glue:BatchDeletePartition
+                  Resource:
+                    # Mix of: hardcoded 'arn:aws:glue:', !Ref for Region/AccountId, 
+                    # hardcoded 'catalog', SSM resolution using self: variable
+                    - !Sub 
+                      - 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog'
+                      - {}
+                    - !Sub 
+                      - 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/{{resolve:ssm:${SSMDbNameKey}}}'
+                      - SSMDbNameKey: ${self:custom.ssmPrefix}/database/silver/name
+                    - !Sub 
+                      - 'arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/{{resolve:ssm:${SSMDbNameKey}}}/*'
+                      - SSMDbNameKey: ${self:custom.ssmPrefix}/database/silver/name
+                # Lake Formation data access
+                - Effect: Allow
+                  Action:
+                    - lakeformation:GetDataAccess
+                  Resource: '*'
+                # CloudWatch Logs
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/jobs/*
+
+    # Glue Job for inserting data
+    GlueDataInsertJob:
+      Type: AWS::Glue::Job
+      Properties:
+        Name: ${self:custom.glueJobName}
+        Role: !GetAtt GlueJobRole.Arn
+        Command:
+          Name: glueetl
+          ScriptLocation: !Sub 
+            - 's3://{{resolve:ssm:${SSMBucketKey}}}/scripts/data_insert_job.py'
+            - SSMBucketKey: ${self:custom.ssmPrefix}/bucket/silver/name
+          PythonVersion: '3'
+        DefaultArguments:
+          '--job-language': python
+          '--enable-metrics': ''
+          '--enable-continuous-cloudwatch-log': 'true'
+          # Pass database name via SSM resolution in job argument
+          '--database_name': !Sub '{{resolve:ssm:${self:custom.ssmPrefix}/database/silver/name}}'
+          '--table_name': 'sample_data'
+          '--bucket_name': !Sub '{{resolve:ssm:${self:custom.ssmPrefix}/bucket/silver/name}}'
+        MaxRetries: 0
+        Timeout: 10
+        GlueVersion: '4.0'
+        MaxCapacity: 2
+
+    # SSM Parameters for cross-stack references
+    SSMGlueJobRoleArn:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: /gov-sv/${self:custom.stackName}/${self:provider.stage}/role/glue-job/arn
+        Type: String
+        Value: !GetAtt GlueJobRole.Arn
+        Description: Glue Job Role ARN
+
+    SSMGlueJobRoleName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: /gov-sv/${self:custom.stackName}/${self:provider.stage}/role/glue-job/name
+        Type: String
+        Value: !Ref GlueJobRole
+        Description: Glue Job Role Name
+
+    SSMGlueJobName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: /gov-sv/${self:custom.stackName}/${self:provider.stage}/job/name
+        Type: String
+        Value: !Ref GlueDataInsertJob
+        Description: Glue Job Name
+
+  Outputs:
+    GlueJobRoleArn:
+      Value: !GetAtt GlueJobRole.Arn
+      Description: Glue Job Role ARN
+
+    GlueJobName:
+      Value: !Ref GlueDataInsertJob
+      Description: Glue Job Name

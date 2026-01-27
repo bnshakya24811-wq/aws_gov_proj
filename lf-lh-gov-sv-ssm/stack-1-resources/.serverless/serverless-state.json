@@ -1,0 +1,600 @@
+{
+  "service": {
+    "service": "lf-lh-gov-sv-stack1",
+    "serviceObject": {
+      "name": "lf-lh-gov-sv-stack1"
+    },
+    "provider": {
+      "name": "aws",
+      "runtime": "python3.11",
+      "stage": "dev",
+      "region": "us-east-1",
+      "versionFunctions": true,
+      "compiledCloudFormationTemplate": {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Description": "The AWS CloudFormation template for this Serverless application",
+        "Resources": {
+          "ServerlessDeploymentBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "BucketEncryption": {
+                "ServerSideEncryptionConfiguration": [
+                  {
+                    "ServerSideEncryptionByDefault": {
+                      "SSEAlgorithm": "AES256"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ServerlessDeploymentBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+              "Bucket": {
+                "Ref": "ServerlessDeploymentBucket"
+              },
+              "PolicyDocument": {
+                "Statement": [
+                  {
+                    "Action": "s3:*",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Resource": [
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            },
+                            "/*"
+                          ]
+                        ]
+                      },
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    "Condition": {
+                      "Bool": {
+                        "aws:SecureTransport": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "LFLHSilverBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "BucketName": "lf-lh-silver-bkt-o-sv-tst1-dev"
+            }
+          },
+          "LFLHSilverDB": {
+            "Type": "AWS::Glue::Database",
+            "Properties": {
+              "CatalogId": {
+                "Ref": "AWS::AccountId"
+              },
+              "DatabaseInput": {
+                "Name": "lf_lh_silver_db_o_sv_tst1"
+              }
+            }
+          },
+          "GlueCrawlerRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+              "RoleName": "lf-lh-glue-crawler-role-o-sv-tst1-dev",
+              "AssumeRolePolicyDocument": {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "glue.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              },
+              "Policies": [
+                {
+                  "PolicyName": "GlueCrawlerCatalogOnlyAccess",
+                  "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "s3:GetObject",
+                          "s3:PutObject",
+                          "s3:ListBucket"
+                        ],
+                        "Resource": [
+                          {
+                            "Fn::Sub": "arn:aws:s3:::lf-lh-silver-bkt-o-sv-tst1-dev"
+                          },
+                          {
+                            "Fn::Sub": "arn:aws:s3:::lf-lh-silver-bkt-o-sv-tst1-dev/*"
+                          }
+                        ]
+                      },
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "glue:*"
+                        ],
+                        "Resource": "*"
+                      },
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "lakeformation:GetDataAccess"
+                        ],
+                        "Resource": "*"
+                      },
+                      {
+                        "Effect": "Allow",
+                        "Action": [
+                          "logs:CreateLogGroup",
+                          "logs:CreateLogStream",
+                          "logs:PutLogEvents"
+                        ],
+                        "Resource": {
+                          "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "LFLHSilverCrawler": {
+            "Type": "AWS::Glue::Crawler",
+            "Properties": {
+              "Name": "lf-lh-silver-crawler-o-sv-tst1",
+              "Role": {
+                "Fn::GetAtt": [
+                  "GlueCrawlerRole",
+                  "Arn"
+                ]
+              },
+              "DatabaseName": "lf_lh_silver_db_o_sv_tst1",
+              "Targets": {
+                "S3Targets": [
+                  {
+                    "Path": {
+                      "Fn::Sub": "s3://lf-lh-silver-bkt-o-sv-tst1-dev/"
+                    }
+                  }
+                ]
+              },
+              "SchemaChangePolicy": {
+                "UpdateBehavior": "UPDATE_IN_DATABASE",
+                "DeleteBehavior": "LOG"
+              },
+              "RecrawlPolicy": {
+                "RecrawlBehavior": "CRAWL_EVERYTHING"
+              },
+              "Configuration": "{\n  \"Version\": 1.0,\n  \"CrawlerOutput\": {\n    \"Partitions\": {\n      \"AddOrUpdateBehavior\": \"InheritFromTable\"\n    },\n    \"Tables\": {\n      \"AddOrUpdateBehavior\": \"MergeNewColumns\"\n    }\n  },\n  \"Grouping\": {\n    \"TableLevelConfiguration\": 1\n  }\n}\n"
+            }
+          },
+          "SSMDatabaseName": {
+            "Type": "AWS::SSM::Parameter",
+            "Properties": {
+              "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name",
+              "Type": "String",
+              "Value": "lf_lh_silver_db_o_sv_tst1",
+              "Description": "Lake Formation Silver Database Name"
+            }
+          },
+          "SSMCrawlerRoleArn": {
+            "Type": "AWS::SSM::Parameter",
+            "Properties": {
+              "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn",
+              "Type": "String",
+              "Value": {
+                "Fn::GetAtt": [
+                  "GlueCrawlerRole",
+                  "Arn"
+                ]
+              },
+              "Description": "Glue Crawler Role ARN"
+            }
+          },
+          "SSMCrawlerRoleName": {
+            "Type": "AWS::SSM::Parameter",
+            "Properties": {
+              "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/name",
+              "Type": "String",
+              "Value": {
+                "Ref": "GlueCrawlerRole"
+              },
+              "Description": "Glue Crawler Role Name"
+            }
+          },
+          "SSMBucketName": {
+            "Type": "AWS::SSM::Parameter",
+            "Properties": {
+              "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name",
+              "Type": "String",
+              "Value": {
+                "Ref": "LFLHSilverBucket"
+              },
+              "Description": "S3 Silver Bucket Name"
+            }
+          },
+          "SSMCrawlerName": {
+            "Type": "AWS::SSM::Parameter",
+            "Properties": {
+              "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/crawler/silver/name",
+              "Type": "String",
+              "Value": {
+                "Ref": "LFLHSilverCrawler"
+              },
+              "Description": "Glue Crawler Name"
+            }
+          }
+        },
+        "Outputs": {
+          "ServerlessDeploymentBucketName": {
+            "Value": {
+              "Ref": "ServerlessDeploymentBucket"
+            },
+            "Export": {
+              "Name": "sls-lf-lh-gov-sv-stack1-dev-ServerlessDeploymentBucketName"
+            }
+          },
+          "DatabaseName": {
+            "Value": "lf_lh_silver_db_o_sv_tst1",
+            "Description": "Glue Database Name"
+          },
+          "CrawlerRoleArn": {
+            "Value": {
+              "Fn::GetAtt": [
+                "GlueCrawlerRole",
+                "Arn"
+              ]
+            },
+            "Description": "Glue Crawler Role ARN"
+          },
+          "BucketName": {
+            "Value": {
+              "Ref": "LFLHSilverBucket"
+            },
+            "Description": "S3 Bucket Name"
+          }
+        }
+      },
+      "coreCloudFormationTemplate": {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Description": "The AWS CloudFormation template for this Serverless application",
+        "Resources": {
+          "ServerlessDeploymentBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "BucketEncryption": {
+                "ServerSideEncryptionConfiguration": [
+                  {
+                    "ServerSideEncryptionByDefault": {
+                      "SSEAlgorithm": "AES256"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ServerlessDeploymentBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+              "Bucket": {
+                "Ref": "ServerlessDeploymentBucket"
+              },
+              "PolicyDocument": {
+                "Statement": [
+                  {
+                    "Action": "s3:*",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Resource": [
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            },
+                            "/*"
+                          ]
+                        ]
+                      },
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    "Condition": {
+                      "Bool": {
+                        "aws:SecureTransport": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "Outputs": {
+          "ServerlessDeploymentBucketName": {
+            "Value": {
+              "Ref": "ServerlessDeploymentBucket"
+            }
+          }
+        }
+      }
+    },
+    "custom": {
+      "stackName": "lf-lh-gov-sv-stack1-o-sv-tst1",
+      "dbName": "lf_lh_silver_db_o_sv_tst1",
+      "bucketName": "lf-lh-silver-bkt-o-sv-tst1-dev",
+      "crawlerName": "lf-lh-silver-crawler-o-sv-tst1",
+      "ssmPrefix": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev"
+    },
+    "pluginsData": {},
+    "functions": {},
+    "resources": {
+      "Resources": {
+        "LFLHSilverBucket": {
+          "Type": "AWS::S3::Bucket",
+          "Properties": {
+            "BucketName": "lf-lh-silver-bkt-o-sv-tst1-dev"
+          }
+        },
+        "LFLHSilverDB": {
+          "Type": "AWS::Glue::Database",
+          "Properties": {
+            "CatalogId": {
+              "Ref": "AWS::AccountId"
+            },
+            "DatabaseInput": {
+              "Name": "lf_lh_silver_db_o_sv_tst1"
+            }
+          }
+        },
+        "GlueCrawlerRole": {
+          "Type": "AWS::IAM::Role",
+          "Properties": {
+            "RoleName": "lf-lh-glue-crawler-role-o-sv-tst1-dev",
+            "AssumeRolePolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Service": "glue.amazonaws.com"
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            },
+            "Policies": [
+              {
+                "PolicyName": "GlueCrawlerCatalogOnlyAccess",
+                "PolicyDocument": {
+                  "Version": "2012-10-17",
+                  "Statement": [
+                    {
+                      "Effect": "Allow",
+                      "Action": [
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:ListBucket"
+                      ],
+                      "Resource": [
+                        {
+                          "Fn::Sub": "arn:aws:s3:::lf-lh-silver-bkt-o-sv-tst1-dev"
+                        },
+                        {
+                          "Fn::Sub": "arn:aws:s3:::lf-lh-silver-bkt-o-sv-tst1-dev/*"
+                        }
+                      ]
+                    },
+                    {
+                      "Effect": "Allow",
+                      "Action": [
+                        "glue:*"
+                      ],
+                      "Resource": "*"
+                    },
+                    {
+                      "Effect": "Allow",
+                      "Action": [
+                        "lakeformation:GetDataAccess"
+                      ],
+                      "Resource": "*"
+                    },
+                    {
+                      "Effect": "Allow",
+                      "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents"
+                      ],
+                      "Resource": {
+                        "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "LFLHSilverCrawler": {
+          "Type": "AWS::Glue::Crawler",
+          "Properties": {
+            "Name": "lf-lh-silver-crawler-o-sv-tst1",
+            "Role": {
+              "Fn::GetAtt": [
+                "GlueCrawlerRole",
+                "Arn"
+              ]
+            },
+            "DatabaseName": "lf_lh_silver_db_o_sv_tst1",
+            "Targets": {
+              "S3Targets": [
+                {
+                  "Path": {
+                    "Fn::Sub": "s3://lf-lh-silver-bkt-o-sv-tst1-dev/"
+                  }
+                }
+              ]
+            },
+            "SchemaChangePolicy": {
+              "UpdateBehavior": "UPDATE_IN_DATABASE",
+              "DeleteBehavior": "LOG"
+            },
+            "RecrawlPolicy": {
+              "RecrawlBehavior": "CRAWL_EVERYTHING"
+            },
+            "Configuration": "{\n  \"Version\": 1.0,\n  \"CrawlerOutput\": {\n    \"Partitions\": {\n      \"AddOrUpdateBehavior\": \"InheritFromTable\"\n    },\n    \"Tables\": {\n      \"AddOrUpdateBehavior\": \"MergeNewColumns\"\n    }\n  },\n  \"Grouping\": {\n    \"TableLevelConfiguration\": 1\n  }\n}\n"
+          }
+        },
+        "SSMDatabaseName": {
+          "Type": "AWS::SSM::Parameter",
+          "Properties": {
+            "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name",
+            "Type": "String",
+            "Value": "lf_lh_silver_db_o_sv_tst1",
+            "Description": "Lake Formation Silver Database Name"
+          }
+        },
+        "SSMCrawlerRoleArn": {
+          "Type": "AWS::SSM::Parameter",
+          "Properties": {
+            "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn",
+            "Type": "String",
+            "Value": {
+              "Fn::GetAtt": [
+                "GlueCrawlerRole",
+                "Arn"
+              ]
+            },
+            "Description": "Glue Crawler Role ARN"
+          }
+        },
+        "SSMCrawlerRoleName": {
+          "Type": "AWS::SSM::Parameter",
+          "Properties": {
+            "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/name",
+            "Type": "String",
+            "Value": {
+              "Ref": "GlueCrawlerRole"
+            },
+            "Description": "Glue Crawler Role Name"
+          }
+        },
+        "SSMBucketName": {
+          "Type": "AWS::SSM::Parameter",
+          "Properties": {
+            "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name",
+            "Type": "String",
+            "Value": {
+              "Ref": "LFLHSilverBucket"
+            },
+            "Description": "S3 Silver Bucket Name"
+          }
+        },
+        "SSMCrawlerName": {
+          "Type": "AWS::SSM::Parameter",
+          "Properties": {
+            "Name": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/crawler/silver/name",
+            "Type": "String",
+            "Value": {
+              "Ref": "LFLHSilverCrawler"
+            },
+            "Description": "Glue Crawler Name"
+          }
+        }
+      },
+      "Outputs": {
+        "DatabaseName": {
+          "Value": "lf_lh_silver_db_o_sv_tst1",
+          "Description": "Glue Database Name"
+        },
+        "CrawlerRoleArn": {
+          "Value": {
+            "Fn::GetAtt": [
+              "GlueCrawlerRole",
+              "Arn"
+            ]
+          },
+          "Description": "Glue Crawler Role ARN"
+        },
+        "BucketName": {
+          "Value": {
+            "Ref": "LFLHSilverBucket"
+          },
+          "Description": "S3 Bucket Name"
+        }
+      }
+    },
+    "configValidationMode": "warn",
+    "serviceFilename": "serverless.yml",
+    "initialServerlessConfig": {
+      "service": "lf-lh-gov-sv-stack1",
+      "frameworkVersion": "3",
+      "provider": {
+        "$ref": "$[\"service\"][\"provider\"]"
+      },
+      "custom": {
+        "$ref": "$[\"service\"][\"custom\"]"
+      },
+      "resources": {
+        "$ref": "$[\"service\"][\"resources\"]"
+      }
+    },
+    "layers": {},
+    "isDashboardMonitoringPreconfigured": false
+  },
+  "package": {
+    "artifactDirectoryName": "serverless/lf-lh-gov-sv-stack1/dev/1769505595731-2026-01-27T09:19:55.731Z",
+    "artifact": ""
+  }
+}

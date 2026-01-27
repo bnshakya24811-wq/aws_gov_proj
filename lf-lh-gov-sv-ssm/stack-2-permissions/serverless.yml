@@ -1,0 +1,220 @@
+service: lf-lh-gov-sv-stack2
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+
+custom:
+  stackName: lf-lh-gov-sv-stack2-o-sv-tst1
+  stack0Name: lf-lh-gov-sv-stack0-o-sv-tst1
+  stack1Name: lf-lh-gov-sv-stack1-o-sv-tst1
+  # Build SSM keys using mix of self: and hardcoded values
+  ssmPrefix: /gov-sv/${self:custom.stack1Name}/${self:provider.stage}
+  ssmDatabaseNameKey: ${self:custom.ssmPrefix}/database/silver/name
+  ssmCrawlerRoleArnKey: ${self:custom.ssmPrefix}/role/crawler/arn
+  # Stack 0 SSM keys for Glue Job
+  ssmStack0Prefix: /gov-sv/${self:custom.stack0Name}/${self:provider.stage}
+  ssmGlueJobRoleArnKey: ${self:custom.ssmStack0Prefix}/role/glue-job/arn
+
+resources:
+  Resources:
+    # Lake Formation Tags
+    DBAccessScopeTag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: DBAccessScope-o-sv-tst1
+        TagValues:
+          - silver
+          - gold
+
+    PIITag:
+      Type: AWS::LakeFormation::Tag
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        TagKey: PII-o-sv-tst1
+        TagValues:
+          - 'true'
+          - 'false'
+
+    # Tag Association for Database
+    LFLHSilverDBTagAssociation:
+      Type: AWS::LakeFormation::TagAssociation
+      DependsOn: DBAccessScopeTag
+      Properties:
+        Resource:
+          Database:
+            CatalogId: !Ref AWS::AccountId
+            # Using SSM reference built with hardcoded prefix and self: values
+            Name: !Sub '{{resolve:ssm:${self:custom.ssmDatabaseNameKey}}}'
+        LFTags:
+          - CatalogId: !Ref AWS::AccountId
+            TagKey: DBAccessScope-o-sv-tst1
+            TagValues:
+              - silver
+
+    # Grant crawler role DATABASE permissions using TBAC
+    GlueCrawlerRoleLFGrantDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: DBAccessScopeTag
+      Properties:
+        Principal:
+          # Complex ARN: mix of hardcoded 'arn:aws:iam::', !Ref for AccountId, 
+          # hardcoded 'role/', SSM resolution using self: variable for role name
+          DataLakePrincipalIdentifier: !Sub 
+            - 'arn:aws:iam::${AccountId}:role/{{resolve:ssm:${SSMRoleNameKey}}}'
+            - AccountId: !Ref AWS::AccountId
+              SSMRoleNameKey: ${self:custom.ssmPrefix}/role/crawler/name
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: DBAccessScope-o-sv-tst1
+                TagValues:
+                  - silver
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    # Grant crawler role TABLE permissions using TBAC
+    GlueCrawlerRoleLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: 
+        - DBAccessScopeTag
+        - PIITag
+      Properties:
+        Principal:
+          # Mix of self: variable referencing the SSM key
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:${self:custom.ssmCrawlerRoleArnKey}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: DBAccessScope-o-sv-tst1
+                TagValues:
+                  - silver
+        Permissions:
+          - ALL
+        PermissionsWithGrantOption: []
+
+    # Grant LF Tag ASSOCIATE permissions to crawler role for DBAccessScope
+    LFTagPermissionForCrawlerRoleDBAccess:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: DBAccessScopeTag
+      Properties:
+        Principal:
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:${self:custom.ssmCrawlerRoleArnKey}}}'
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: DBAccessScope-o-sv-tst1
+            TagValues:
+              - "*"
+        Permissions:
+          - ASSOCIATE
+        PermissionsWithGrantOption:
+          - ASSOCIATE
+
+    # Grant LF Tag ASSOCIATE permissions to crawler role for PII
+    LFTagPermissionForCrawlerRolePII:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: PIITag
+      Properties:
+        Principal:
+          # Hardcoded env 'dev' mixed with self: stack1Name
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:/gov-sv/${self:custom.stack1Name}/${self:provider.stage}/role/crawler/arn}}'
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: PII-o-sv-tst1
+            TagValues:
+              - "*"
+        Permissions:
+          - ASSOCIATE
+        PermissionsWithGrantOption:
+          - ASSOCIATE
+
+    # Grant Glue Job role DATABASE permissions using TBAC
+    GlueJobRoleLFGrantDB:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: DBAccessScopeTag
+      Properties:
+        Principal:
+          # Complex ARN from Stack 0: mix of hardcoded prefix, !Ref AccountId, 
+          # hardcoded 'role/', SSM from stack0 using self: variables
+          DataLakePrincipalIdentifier: !Sub 
+            - 'arn:aws:iam::${AccountId}:role/{{resolve:ssm:${GlueJobRoleNameKey}}}'
+            - AccountId: !Ref AWS::AccountId
+              GlueJobRoleNameKey: ${self:custom.ssmStack0Prefix}/role/glue-job/name
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: DATABASE
+            Expression:
+              - TagKey: DBAccessScope-o-sv-tst1
+                TagValues:
+                  - silver
+        Permissions:
+          - CREATE_TABLE
+          - ALTER
+          - DROP
+        PermissionsWithGrantOption: []
+
+    # Grant Glue Job role TABLE permissions using TBAC
+    GlueJobRoleLFGrantTable:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: 
+        - DBAccessScopeTag
+        - PIITag
+      Properties:
+        Principal:
+          # Using SSM key variable built with stack0Name
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:${self:custom.ssmGlueJobRoleArnKey}}}'
+        Resource:
+          LFTagPolicy:
+            CatalogId: !Ref AWS::AccountId
+            ResourceType: TABLE
+            Expression:
+              - TagKey: DBAccessScope-o-sv-tst1
+                TagValues:
+                  - silver
+        Permissions:
+          - SELECT
+          - INSERT
+          - DELETE
+          - ALTER
+          - DESCRIBE
+        PermissionsWithGrantOption: []
+
+    # Grant LF Tag ASSOCIATE permissions to Glue Job role for PII tags
+    LFTagPermissionForGlueJobRolePII:
+      Type: AWS::LakeFormation::PrincipalPermissions
+      DependsOn: PIITag
+      Properties:
+        Principal:
+          # Mix: hardcoded '/gov-sv/', self: stack0Name, self: provider.stage, hardcoded path
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:/gov-sv/${self:custom.stack0Name}/${self:provider.stage}/role/glue-job/arn}}'
+        Resource:
+          LFTag:
+            CatalogId: !Ref AWS::AccountId
+            TagKey: PII-o-sv-tst1
+            TagValues:
+              - "*"
+        Permissions:
+          - ASSOCIATE
+        PermissionsWithGrantOption: []
+
+  Outputs:
+    DBAccessScopeTagKey:
+      Value: DBAccessScope-o-sv-tst1
+      Description: Database Access Scope Tag Key
+
+    PIITagKey:
+      Value: PII-o-sv-tst1
+      Description: PII Tag Key

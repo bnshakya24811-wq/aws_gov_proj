@@ -1,0 +1,157 @@
+service: lf-lh-gov-sv-stack1
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+
+custom:
+  stackName: lf-lh-gov-sv-stack1-o-sv-tst1
+  dbName: lf_lh_silver_db_o_sv_tst1
+  bucketName: lf-lh-silver-bkt-o-sv-tst1-${self:provider.stage}
+  crawlerName: lf-lh-silver-crawler-o-sv-tst1
+  ssmPrefix: /gov-sv/${self:custom.stackName}/${self:provider.stage}
+
+resources:
+  Resources:
+    # S3 Bucket for data
+    LFLHSilverBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+
+    # Glue Database
+    LFLHSilverDB:
+      Type: AWS::Glue::Database
+      Properties:
+        CatalogId: !Ref AWS::AccountId
+        DatabaseInput:
+          Name: ${self:custom.dbName}
+
+    # Glue Crawler Role
+    GlueCrawlerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: lf-lh-glue-crawler-role-o-sv-tst1-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: glue.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: GlueCrawlerCatalogOnlyAccess
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub arn:aws:s3:::${self:custom.bucketName}
+                    - !Sub arn:aws:s3:::${self:custom.bucketName}/*
+                - Effect: Allow
+                  Action:
+                    - glue:*
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - lakeformation:GetDataAccess
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/crawlers*
+
+    # Glue Crawler
+    LFLHSilverCrawler:
+      Type: AWS::Glue::Crawler
+      Properties:
+        Name: ${self:custom.crawlerName}
+        Role: !GetAtt GlueCrawlerRole.Arn
+        DatabaseName: ${self:custom.dbName}
+        Targets:
+          S3Targets:
+            - Path: !Sub s3://${self:custom.bucketName}/
+        SchemaChangePolicy:
+          UpdateBehavior: UPDATE_IN_DATABASE
+          DeleteBehavior: LOG
+        RecrawlPolicy:
+          RecrawlBehavior: CRAWL_EVERYTHING
+        Configuration: |
+          {
+            "Version": 1.0,
+            "CrawlerOutput": {
+              "Partitions": {
+                "AddOrUpdateBehavior": "InheritFromTable"
+              },
+              "Tables": {
+                "AddOrUpdateBehavior": "MergeNewColumns"
+              }
+            },
+            "Grouping": {
+              "TableLevelConfiguration": 1
+            }
+          }
+
+    # SSM Parameters for cross-stack references
+    SSMDatabaseName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/database/silver/name
+        Type: String
+        Value: ${self:custom.dbName}
+        Description: Lake Formation Silver Database Name
+
+    SSMCrawlerRoleArn:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/role/crawler/arn
+        Type: String
+        Value: !GetAtt GlueCrawlerRole.Arn
+        Description: Glue Crawler Role ARN
+
+    SSMCrawlerRoleName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/role/crawler/name
+        Type: String
+        Value: !Ref GlueCrawlerRole
+        Description: Glue Crawler Role Name
+
+    SSMBucketName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/bucket/silver/name
+        Type: String
+        Value: !Ref LFLHSilverBucket
+        Description: S3 Silver Bucket Name
+
+    SSMCrawlerName:
+      Type: AWS::SSM::Parameter
+      Properties:
+        Name: ${self:custom.ssmPrefix}/crawler/silver/name
+        Type: String
+        Value: !Ref LFLHSilverCrawler
+        Description: Glue Crawler Name
+
+  Outputs:
+    DatabaseName:
+      Value: ${self:custom.dbName}
+      Description: Glue Database Name
+
+    CrawlerRoleArn:
+      Value: !GetAtt GlueCrawlerRole.Arn
+      Description: Glue Crawler Role ARN
+
+    BucketName:
+      Value: !Ref LFLHSilverBucket
+      Description: S3 Bucket Name

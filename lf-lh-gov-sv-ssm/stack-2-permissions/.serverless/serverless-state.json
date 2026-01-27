@@ -1,0 +1,835 @@
+{
+  "service": {
+    "service": "lf-lh-gov-sv-stack2",
+    "serviceObject": {
+      "name": "lf-lh-gov-sv-stack2"
+    },
+    "provider": {
+      "name": "aws",
+      "runtime": "python3.11",
+      "stage": "dev",
+      "region": "us-east-1",
+      "versionFunctions": true,
+      "compiledCloudFormationTemplate": {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Description": "The AWS CloudFormation template for this Serverless application",
+        "Resources": {
+          "ServerlessDeploymentBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "BucketEncryption": {
+                "ServerSideEncryptionConfiguration": [
+                  {
+                    "ServerSideEncryptionByDefault": {
+                      "SSEAlgorithm": "AES256"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ServerlessDeploymentBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+              "Bucket": {
+                "Ref": "ServerlessDeploymentBucket"
+              },
+              "PolicyDocument": {
+                "Statement": [
+                  {
+                    "Action": "s3:*",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Resource": [
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            },
+                            "/*"
+                          ]
+                        ]
+                      },
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    "Condition": {
+                      "Bool": {
+                        "aws:SecureTransport": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "DBAccessScopeTag": {
+            "Type": "AWS::LakeFormation::Tag",
+            "Properties": {
+              "CatalogId": {
+                "Ref": "AWS::AccountId"
+              },
+              "TagKey": "DBAccessScope-o-sv-tst1",
+              "TagValues": [
+                "silver",
+                "gold"
+              ]
+            }
+          },
+          "PIITag": {
+            "Type": "AWS::LakeFormation::Tag",
+            "Properties": {
+              "CatalogId": {
+                "Ref": "AWS::AccountId"
+              },
+              "TagKey": "PII-o-sv-tst1",
+              "TagValues": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          "LFLHSilverDBTagAssociation": {
+            "Type": "AWS::LakeFormation::TagAssociation",
+            "DependsOn": [
+              "DBAccessScopeTag"
+            ],
+            "Properties": {
+              "Resource": {
+                "Database": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "Name": {
+                    "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name}}"
+                  }
+                }
+              },
+              "LFTags": [
+                {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "TagKey": "DBAccessScope-o-sv-tst1",
+                  "TagValues": [
+                    "silver"
+                  ]
+                }
+              ]
+            }
+          },
+          "GlueCrawlerRoleLFGrantDB": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "DBAccessScopeTag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": [
+                    "arn:aws:iam::${AccountId}:role/{{resolve:ssm:${SSMRoleNameKey}}}",
+                    {
+                      "AccountId": {
+                        "Ref": "AWS::AccountId"
+                      },
+                      "SSMRoleNameKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/name"
+                    }
+                  ]
+                }
+              },
+              "Resource": {
+                "LFTagPolicy": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "ResourceType": "DATABASE",
+                  "Expression": [
+                    {
+                      "TagKey": "DBAccessScope-o-sv-tst1",
+                      "TagValues": [
+                        "silver"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "Permissions": [
+                "ALL"
+              ],
+              "PermissionsWithGrantOption": []
+            }
+          },
+          "GlueCrawlerRoleLFGrantTable": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "DBAccessScopeTag",
+              "PIITag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+                }
+              },
+              "Resource": {
+                "LFTagPolicy": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "ResourceType": "TABLE",
+                  "Expression": [
+                    {
+                      "TagKey": "DBAccessScope-o-sv-tst1",
+                      "TagValues": [
+                        "silver"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "Permissions": [
+                "ALL"
+              ],
+              "PermissionsWithGrantOption": []
+            }
+          },
+          "LFTagPermissionForCrawlerRoleDBAccess": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "DBAccessScopeTag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+                }
+              },
+              "Resource": {
+                "LFTag": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "TagKey": "DBAccessScope-o-sv-tst1",
+                  "TagValues": [
+                    "*"
+                  ]
+                }
+              },
+              "Permissions": [
+                "ASSOCIATE"
+              ],
+              "PermissionsWithGrantOption": [
+                "ASSOCIATE"
+              ]
+            }
+          },
+          "LFTagPermissionForCrawlerRolePII": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "PIITag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+                }
+              },
+              "Resource": {
+                "LFTag": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "TagKey": "PII-o-sv-tst1",
+                  "TagValues": [
+                    "*"
+                  ]
+                }
+              },
+              "Permissions": [
+                "ASSOCIATE"
+              ],
+              "PermissionsWithGrantOption": [
+                "ASSOCIATE"
+              ]
+            }
+          },
+          "GlueJobRoleLFGrantDB": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "DBAccessScopeTag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": [
+                    "arn:aws:iam::${AccountId}:role/{{resolve:ssm:${GlueJobRoleNameKey}}}",
+                    {
+                      "AccountId": {
+                        "Ref": "AWS::AccountId"
+                      },
+                      "GlueJobRoleNameKey": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/name"
+                    }
+                  ]
+                }
+              },
+              "Resource": {
+                "LFTagPolicy": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "ResourceType": "DATABASE",
+                  "Expression": [
+                    {
+                      "TagKey": "DBAccessScope-o-sv-tst1",
+                      "TagValues": [
+                        "silver"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "Permissions": [
+                "CREATE_TABLE",
+                "ALTER",
+                "DROP"
+              ],
+              "PermissionsWithGrantOption": []
+            }
+          },
+          "GlueJobRoleLFGrantTable": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "DBAccessScopeTag",
+              "PIITag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn}}"
+                }
+              },
+              "Resource": {
+                "LFTagPolicy": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "ResourceType": "TABLE",
+                  "Expression": [
+                    {
+                      "TagKey": "DBAccessScope-o-sv-tst1",
+                      "TagValues": [
+                        "silver"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "Permissions": [
+                "SELECT",
+                "INSERT",
+                "DELETE",
+                "ALTER",
+                "DESCRIBE"
+              ],
+              "PermissionsWithGrantOption": []
+            }
+          },
+          "LFTagPermissionForGlueJobRolePII": {
+            "Type": "AWS::LakeFormation::PrincipalPermissions",
+            "DependsOn": [
+              "PIITag"
+            ],
+            "Properties": {
+              "Principal": {
+                "DataLakePrincipalIdentifier": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn}}"
+                }
+              },
+              "Resource": {
+                "LFTag": {
+                  "CatalogId": {
+                    "Ref": "AWS::AccountId"
+                  },
+                  "TagKey": "PII-o-sv-tst1",
+                  "TagValues": [
+                    "*"
+                  ]
+                }
+              },
+              "Permissions": [
+                "ASSOCIATE"
+              ],
+              "PermissionsWithGrantOption": []
+            }
+          }
+        },
+        "Outputs": {
+          "ServerlessDeploymentBucketName": {
+            "Value": {
+              "Ref": "ServerlessDeploymentBucket"
+            },
+            "Export": {
+              "Name": "sls-lf-lh-gov-sv-stack2-dev-ServerlessDeploymentBucketName"
+            }
+          },
+          "DBAccessScopeTagKey": {
+            "Value": "DBAccessScope-o-sv-tst1",
+            "Description": "Database Access Scope Tag Key"
+          },
+          "PIITagKey": {
+            "Value": "PII-o-sv-tst1",
+            "Description": "PII Tag Key"
+          }
+        }
+      },
+      "coreCloudFormationTemplate": {
+        "AWSTemplateFormatVersion": "2010-09-09",
+        "Description": "The AWS CloudFormation template for this Serverless application",
+        "Resources": {
+          "ServerlessDeploymentBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+              "BucketEncryption": {
+                "ServerSideEncryptionConfiguration": [
+                  {
+                    "ServerSideEncryptionByDefault": {
+                      "SSEAlgorithm": "AES256"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ServerlessDeploymentBucketPolicy": {
+            "Type": "AWS::S3::BucketPolicy",
+            "Properties": {
+              "Bucket": {
+                "Ref": "ServerlessDeploymentBucket"
+              },
+              "PolicyDocument": {
+                "Statement": [
+                  {
+                    "Action": "s3:*",
+                    "Effect": "Deny",
+                    "Principal": "*",
+                    "Resource": [
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            },
+                            "/*"
+                          ]
+                        ]
+                      },
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:",
+                            {
+                              "Ref": "AWS::Partition"
+                            },
+                            ":s3:::",
+                            {
+                              "Ref": "ServerlessDeploymentBucket"
+                            }
+                          ]
+                        ]
+                      }
+                    ],
+                    "Condition": {
+                      "Bool": {
+                        "aws:SecureTransport": false
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "Outputs": {
+          "ServerlessDeploymentBucketName": {
+            "Value": {
+              "Ref": "ServerlessDeploymentBucket"
+            }
+          }
+        }
+      }
+    },
+    "custom": {
+      "stackName": "lf-lh-gov-sv-stack2-o-sv-tst1",
+      "stack0Name": "lf-lh-gov-sv-stack0-o-sv-tst1",
+      "stack1Name": "lf-lh-gov-sv-stack1-o-sv-tst1",
+      "ssmPrefix": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev",
+      "ssmDatabaseNameKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name",
+      "ssmCrawlerRoleArnKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn",
+      "ssmStack0Prefix": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev",
+      "ssmGlueJobRoleArnKey": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn"
+    },
+    "pluginsData": {},
+    "functions": {},
+    "resources": {
+      "Resources": {
+        "DBAccessScopeTag": {
+          "Type": "AWS::LakeFormation::Tag",
+          "Properties": {
+            "CatalogId": {
+              "Ref": "AWS::AccountId"
+            },
+            "TagKey": "DBAccessScope-o-sv-tst1",
+            "TagValues": [
+              "silver",
+              "gold"
+            ]
+          }
+        },
+        "PIITag": {
+          "Type": "AWS::LakeFormation::Tag",
+          "Properties": {
+            "CatalogId": {
+              "Ref": "AWS::AccountId"
+            },
+            "TagKey": "PII-o-sv-tst1",
+            "TagValues": [
+              "true",
+              "false"
+            ]
+          }
+        },
+        "LFLHSilverDBTagAssociation": {
+          "Type": "AWS::LakeFormation::TagAssociation",
+          "DependsOn": [
+            "DBAccessScopeTag"
+          ],
+          "Properties": {
+            "Resource": {
+              "Database": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "Name": {
+                  "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name}}"
+                }
+              }
+            },
+            "LFTags": [
+              {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "TagKey": "DBAccessScope-o-sv-tst1",
+                "TagValues": [
+                  "silver"
+                ]
+              }
+            ]
+          }
+        },
+        "GlueCrawlerRoleLFGrantDB": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "DBAccessScopeTag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": [
+                  "arn:aws:iam::${AccountId}:role/{{resolve:ssm:${SSMRoleNameKey}}}",
+                  {
+                    "AccountId": {
+                      "Ref": "AWS::AccountId"
+                    },
+                    "SSMRoleNameKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/name"
+                  }
+                ]
+              }
+            },
+            "Resource": {
+              "LFTagPolicy": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "ResourceType": "DATABASE",
+                "Expression": [
+                  {
+                    "TagKey": "DBAccessScope-o-sv-tst1",
+                    "TagValues": [
+                      "silver"
+                    ]
+                  }
+                ]
+              }
+            },
+            "Permissions": [
+              "ALL"
+            ],
+            "PermissionsWithGrantOption": []
+          }
+        },
+        "GlueCrawlerRoleLFGrantTable": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "DBAccessScopeTag",
+            "PIITag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+              }
+            },
+            "Resource": {
+              "LFTagPolicy": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "ResourceType": "TABLE",
+                "Expression": [
+                  {
+                    "TagKey": "DBAccessScope-o-sv-tst1",
+                    "TagValues": [
+                      "silver"
+                    ]
+                  }
+                ]
+              }
+            },
+            "Permissions": [
+              "ALL"
+            ],
+            "PermissionsWithGrantOption": []
+          }
+        },
+        "LFTagPermissionForCrawlerRoleDBAccess": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "DBAccessScopeTag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+              }
+            },
+            "Resource": {
+              "LFTag": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "TagKey": "DBAccessScope-o-sv-tst1",
+                "TagValues": [
+                  "*"
+                ]
+              }
+            },
+            "Permissions": [
+              "ASSOCIATE"
+            ],
+            "PermissionsWithGrantOption": [
+              "ASSOCIATE"
+            ]
+          }
+        },
+        "LFTagPermissionForCrawlerRolePII": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "PIITag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/role/crawler/arn}}"
+              }
+            },
+            "Resource": {
+              "LFTag": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "TagKey": "PII-o-sv-tst1",
+                "TagValues": [
+                  "*"
+                ]
+              }
+            },
+            "Permissions": [
+              "ASSOCIATE"
+            ],
+            "PermissionsWithGrantOption": [
+              "ASSOCIATE"
+            ]
+          }
+        },
+        "GlueJobRoleLFGrantDB": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "DBAccessScopeTag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": [
+                  "arn:aws:iam::${AccountId}:role/{{resolve:ssm:${GlueJobRoleNameKey}}}",
+                  {
+                    "AccountId": {
+                      "Ref": "AWS::AccountId"
+                    },
+                    "GlueJobRoleNameKey": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/name"
+                  }
+                ]
+              }
+            },
+            "Resource": {
+              "LFTagPolicy": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "ResourceType": "DATABASE",
+                "Expression": [
+                  {
+                    "TagKey": "DBAccessScope-o-sv-tst1",
+                    "TagValues": [
+                      "silver"
+                    ]
+                  }
+                ]
+              }
+            },
+            "Permissions": [
+              "CREATE_TABLE",
+              "ALTER",
+              "DROP"
+            ],
+            "PermissionsWithGrantOption": []
+          }
+        },
+        "GlueJobRoleLFGrantTable": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "DBAccessScopeTag",
+            "PIITag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn}}"
+              }
+            },
+            "Resource": {
+              "LFTagPolicy": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "ResourceType": "TABLE",
+                "Expression": [
+                  {
+                    "TagKey": "DBAccessScope-o-sv-tst1",
+                    "TagValues": [
+                      "silver"
+                    ]
+                  }
+                ]
+              }
+            },
+            "Permissions": [
+              "SELECT",
+              "INSERT",
+              "DELETE",
+              "ALTER",
+              "DESCRIBE"
+            ],
+            "PermissionsWithGrantOption": []
+          }
+        },
+        "LFTagPermissionForGlueJobRolePII": {
+          "Type": "AWS::LakeFormation::PrincipalPermissions",
+          "DependsOn": [
+            "PIITag"
+          ],
+          "Properties": {
+            "Principal": {
+              "DataLakePrincipalIdentifier": {
+                "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn}}"
+              }
+            },
+            "Resource": {
+              "LFTag": {
+                "CatalogId": {
+                  "Ref": "AWS::AccountId"
+                },
+                "TagKey": "PII-o-sv-tst1",
+                "TagValues": [
+                  "*"
+                ]
+              }
+            },
+            "Permissions": [
+              "ASSOCIATE"
+            ],
+            "PermissionsWithGrantOption": []
+          }
+        }
+      },
+      "Outputs": {
+        "DBAccessScopeTagKey": {
+          "Value": "DBAccessScope-o-sv-tst1",
+          "Description": "Database Access Scope Tag Key"
+        },
+        "PIITagKey": {
+          "Value": "PII-o-sv-tst1",
+          "Description": "PII Tag Key"
+        }
+      }
+    },
+    "configValidationMode": "warn",
+    "serviceFilename": "serverless.yml",
+    "initialServerlessConfig": {
+      "service": "lf-lh-gov-sv-stack2",
+      "frameworkVersion": "3",
+      "provider": {
+        "$ref": "$[\"service\"][\"provider\"]"
+      },
+      "custom": {
+        "$ref": "$[\"service\"][\"custom\"]"
+      },
+      "resources": {
+        "$ref": "$[\"service\"][\"resources\"]"
+      }
+    },
+    "layers": {},
+    "isDashboardMonitoringPreconfigured": false
+  },
+  "package": {
+    "artifactDirectoryName": "serverless/lf-lh-gov-sv-stack2/dev/1769506894088-2026-01-27T09:41:34.088Z",
+    "artifact": ""
+  }
+}

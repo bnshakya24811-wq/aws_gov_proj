@@ -1,0 +1,287 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "The AWS CloudFormation template for this Serverless application",
+  "Resources": {
+    "ServerlessDeploymentBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ServerlessDeploymentBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "ServerlessDeploymentBucket"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Ref": "ServerlessDeploymentBucket"
+                      },
+                      "/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Ref": "ServerlessDeploymentBucket"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": false
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "GlueJobRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "lf-lh-glue-job-role-o-sv-tst1-dev",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "glue.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "GlueJobDataAccessPolicy",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:aws:s3:::{{resolve:ssm:${SSMBucketKey}}}",
+                        {
+                          "SSMBucketKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name"
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:aws:s3:::{{resolve:ssm:${SSMBucketKey}}}/*",
+                        {
+                          "SSMBucketKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "glue:GetDatabase",
+                    "glue:GetTable",
+                    "glue:GetTables",
+                    "glue:CreateTable",
+                    "glue:UpdateTable",
+                    "glue:BatchCreatePartition",
+                    "glue:BatchDeletePartition"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": [
+                        "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog",
+                        {}
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/{{resolve:ssm:${SSMDbNameKey}}}",
+                        {
+                          "SSMDbNameKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name"
+                        }
+                      ]
+                    },
+                    {
+                      "Fn::Sub": [
+                        "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/{{resolve:ssm:${SSMDbNameKey}}}/*",
+                        {
+                          "SSMDbNameKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lakeformation:GetDataAccess"
+                  ],
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/jobs/*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "GlueDataInsertJob": {
+      "Type": "AWS::Glue::Job",
+      "Properties": {
+        "Name": "lf-lh-data-insert-job-o-sv-tst1-dev",
+        "Role": {
+          "Fn::GetAtt": [
+            "GlueJobRole",
+            "Arn"
+          ]
+        },
+        "Command": {
+          "Name": "glueetl",
+          "ScriptLocation": {
+            "Fn::Sub": [
+              "s3://{{resolve:ssm:${SSMBucketKey}}}/scripts/data_insert_job.py",
+              {
+                "SSMBucketKey": "/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name"
+              }
+            ]
+          },
+          "PythonVersion": "3"
+        },
+        "DefaultArguments": {
+          "--job-language": "python",
+          "--enable-metrics": "",
+          "--enable-continuous-cloudwatch-log": "true",
+          "--database_name": {
+            "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/database/silver/name}}"
+          },
+          "--table_name": "sample_data",
+          "--bucket_name": {
+            "Fn::Sub": "{{resolve:ssm:/gov-sv/lf-lh-gov-sv-stack1-o-sv-tst1/dev/bucket/silver/name}}"
+          }
+        },
+        "MaxRetries": 0,
+        "Timeout": 10,
+        "GlueVersion": "4.0",
+        "MaxCapacity": 2
+      }
+    },
+    "SSMGlueJobRoleArn": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/arn",
+        "Type": "String",
+        "Value": {
+          "Fn::GetAtt": [
+            "GlueJobRole",
+            "Arn"
+          ]
+        },
+        "Description": "Glue Job Role ARN"
+      }
+    },
+    "SSMGlueJobRoleName": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/role/glue-job/name",
+        "Type": "String",
+        "Value": {
+          "Ref": "GlueJobRole"
+        },
+        "Description": "Glue Job Role Name"
+      }
+    },
+    "SSMGlueJobName": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "/gov-sv/lf-lh-gov-sv-stack0-o-sv-tst1/dev/job/name",
+        "Type": "String",
+        "Value": {
+          "Ref": "GlueDataInsertJob"
+        },
+        "Description": "Glue Job Name"
+      }
+    }
+  },
+  "Outputs": {
+    "ServerlessDeploymentBucketName": {
+      "Value": {
+        "Ref": "ServerlessDeploymentBucket"
+      },
+      "Export": {
+        "Name": "sls-lf-lh-gov-sv-stack0-dev-ServerlessDeploymentBucketName"
+      }
+    },
+    "GlueJobRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "GlueJobRole",
+          "Arn"
+        ]
+      },
+      "Description": "Glue Job Role ARN"
+    },
+    "GlueJobName": {
+      "Value": {
+        "Ref": "GlueDataInsertJob"
+      },
+      "Description": "Glue Job Name"
+    }
+  }
+}
