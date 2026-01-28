@@ -1,14 +1,16 @@
 /**
  * Lambda handler for Athena queries with Lake Formation permissions.
- * Supports both API key and IAM authentication.
+ * Supports three authentication methods:
  * - API key: Maps API key to IAM role, assumes role, executes query
  * - IAM: Maps IAM user ARN to IAM role, assumes role, executes query
+ * - OAuth: Authenticates with Cognito, maps user to IAM role, assumes role, executes query
  */
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { getConfig } from './config';
 import { QueryRequest } from './types';
 import { ApiKeyService } from './services/apiKeyService';
 import { IAMUserService } from './services/iamUserService';
+import { CognitoService } from './services/cognitoService';
 import { RoleService } from './services/roleService';
 import { AthenaService } from './services/athenaService';
 import { createErrorResponse, createSuccessResponse, LambdaError } from './utils/errorHandler';
@@ -32,16 +34,20 @@ export const handler = async (
     // Load configuration
     const config = getConfig();
 
+    // Parse request body first to check for OAuth credentials
+    const body = parseBody(event);
+
     // Detect authentication method
     const apiKey = extractApiKey(event);
     const iamUserArn = extractIAMUserArn(event);
+    const hasOAuthCredentials = body.username && body.password;
 
-    if (!apiKey && !iamUserArn) {
-      return createErrorResponse(401, 'Missing authentication: provide either API key or IAM credentials');
+    if (!apiKey && !iamUserArn && !hasOAuthCredentials) {
+      return createErrorResponse(
+        401,
+        'Missing authentication: provide API key, IAM credentials, or username/password'
+      );
     }
-
-    // Parse and validate request body
-    const request = parseRequestBody(event);
 
     // Initialize services
     const roleService = new RoleService(config.region);
@@ -53,9 +59,45 @@ export const handler = async (
 
     let roleArn: string;
     let authMethod: string;
+    let username: string | undefined;
+    let userGroups: string[] = [];
 
     // Determine Lake Formation role based on authentication method
-    if (apiKey) {
+    if (hasOAuthCredentials) {
+      // OAuth authentication with Cognito
+      authMethod = 'OAUTH';
+      logger.info('Using OAuth authentication');
+
+      if (!config.cognitoUserPoolId || !config.cognitoClientId || !config.cognitoClientSecret) {
+        return createErrorResponse(500, 'OAuth not configured on this endpoint');
+      }
+
+      if (!config.lfDevRoleArn || !config.lfSuperRoleArn) {
+        return createErrorResponse(500, 'Lake Formation roles not configured');
+      }
+
+      const cognitoService = new CognitoService(
+        config.region,
+        config.cognitoUserPoolId,
+        config.cognitoClientId,
+        config.cognitoClientSecret
+      );
+
+      // Authenticate user
+      const authResult = await cognitoService.authenticateUser(body.username!, body.password!);
+
+      // Get user info and groups
+      const userInfo = await cognitoService.getUserInfo(authResult.accessToken);
+      username = userInfo.username;
+      userGroups = userInfo.groups;
+
+      // Map user to LF role
+      roleArn = cognitoService.mapUserToLFRole(
+        userInfo,
+        config.lfDevRoleArn,
+        config.lfSuperRoleArn
+      );
+    } else if (apiKey) {
       // API Key authentication
       authMethod = 'API_KEY';
       logger.info('Using API key authentication');
@@ -72,19 +114,32 @@ export const handler = async (
     // Workflow: Identity → Role ARN → Assume Role → Execute Query
     logger.info('Starting query workflow', {
       authMethod,
-      tableName: request.tableName,
-      limit: request.limit,
+      query: body.query,
+      tableName: body.tableName,
     });
 
     // Step 1: Assume the Lake Formation role
     const credentials = await roleService.assumeRole(roleArn);
 
     // Step 2: Execute Athena query with assumed credentials
-    const { query, results } = await athenaService.executeQuery(
-      request.tableName,
-      request.limit!,
-      credentials
-    );
+    let query: string;
+    let results: string[][];
+
+    if (body.query) {
+      // OAuth: Execute raw SQL query
+      const queryResult = await athenaService.executeRawQuery(body.query, credentials);
+      query = queryResult.query;
+      results = queryResult.results;
+    } else {
+      // API Key / IAM: Execute table query
+      if (!body.tableName) {
+        throw new LambdaError(400, 'Missing required parameter: tableName or query');
+      }
+      const limit = body.limit || 100;
+      const queryResult = await athenaService.executeQuery(body.tableName, limit, credentials);
+      query = queryResult.query;
+      results = queryResult.results;
+    }
 
     // Step 3: Return results
     logger.info('Query workflow completed successfully', {
@@ -92,13 +147,22 @@ export const handler = async (
       rowCount: results.length - 1, // Subtract header row
     });
 
-    return createSuccessResponse({
+    const response: any = {
       success: true,
       authMethod,
       query,
-      rowCount: results.length - 1, // Subtract header row
+      rowCount: results.length - 1,
       data: results,
-    });
+    };
+
+    // Add OAuth-specific fields
+    if (authMethod === 'OAUTH') {
+      response.authenticatedUser = username;
+      response.userGroups = userGroups;
+      response.lfRole = roleArn;
+    }
+
+    return createSuccessResponse(response);
   } catch (error) {
     if (error instanceof LambdaError) {
       logger.warn('Known error occurred', { statusCode: error.statusCode, message: error.message });
@@ -138,7 +202,18 @@ function extractIAMUserArn(event: APIGatewayProxyEvent): string | null {
 }
 
 /**
- * Parse and validate request body
+ * Parse request body
+ */
+function parseBody(event: APIGatewayProxyEvent): QueryRequest {
+  try {
+    return JSON.parse(event.body || '{}');
+  } catch (error) {
+    throw new LambdaError(400, 'Invalid JSON in request body');
+  }
+}
+
+/**
+ * Parse and validate request body (deprecated - kept for backwards compatibility)
  */
 function parseRequestBody(event: APIGatewayProxyEvent): QueryRequest {
   try {

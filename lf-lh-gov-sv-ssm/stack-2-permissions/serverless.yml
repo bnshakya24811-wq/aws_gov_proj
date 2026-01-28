@@ -9,16 +9,12 @@ provider:
   region: ${opt:region, 'us-east-1'}
 
 custom:
-  stackName: lf-lh-gov-sv-stack2-o-sv-tst1
-  stack0Name: lf-lh-gov-sv-stack0-o-sv-tst1
-  stack1Name: lf-lh-gov-sv-stack1-o-sv-tst1
+  stackName: lf-lh-gov-sv-stack2
+  stack1Name: lf-lh-gov-sv-stack1
   # Build SSM keys using mix of self: and hardcoded values
   ssmPrefix: /gov-sv/${self:custom.stack1Name}/${self:provider.stage}
   ssmDatabaseNameKey: ${self:custom.ssmPrefix}/database/silver/name
   ssmCrawlerRoleArnKey: ${self:custom.ssmPrefix}/role/crawler/arn
-  # Stack 0 SSM keys for Glue Job
-  ssmStack0Prefix: /gov-sv/${self:custom.stack0Name}/${self:provider.stage}
-  ssmGlueJobRoleArnKey: ${self:custom.ssmStack0Prefix}/role/glue-job/arn
 
 resources:
   Resources:
@@ -27,7 +23,7 @@ resources:
       Type: AWS::LakeFormation::Tag
       Properties:
         CatalogId: !Ref AWS::AccountId
-        TagKey: DBAccessScope-o-sv-tst1
+        TagKey: DBAccessScope
         TagValues:
           - silver
           - gold
@@ -36,7 +32,7 @@ resources:
       Type: AWS::LakeFormation::Tag
       Properties:
         CatalogId: !Ref AWS::AccountId
-        TagKey: PII-o-sv-tst1
+        TagKey: PII
         TagValues:
           - 'true'
           - 'false'
@@ -53,7 +49,7 @@ resources:
             Name: !Sub '{{resolve:ssm:${self:custom.ssmDatabaseNameKey}}}'
         LFTags:
           - CatalogId: !Ref AWS::AccountId
-            TagKey: DBAccessScope-o-sv-tst1
+            TagKey: DBAccessScope
             TagValues:
               - silver
 
@@ -63,18 +59,14 @@ resources:
       DependsOn: DBAccessScopeTag
       Properties:
         Principal:
-          # Complex ARN: mix of hardcoded 'arn:aws:iam::', !Ref for AccountId, 
-          # hardcoded 'role/', SSM resolution using self: variable for role name
-          DataLakePrincipalIdentifier: !Sub 
-            - 'arn:aws:iam::${AccountId}:role/{{resolve:ssm:${SSMRoleNameKey}}}'
-            - AccountId: !Ref AWS::AccountId
-              SSMRoleNameKey: ${self:custom.ssmPrefix}/role/crawler/name
+          # Using !Sub with combination of hardcoded, self:, and SSM value
+          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:${self:custom.ssmCrawlerRoleArnKey}}}'
         Resource:
           LFTagPolicy:
             CatalogId: !Ref AWS::AccountId
             ResourceType: DATABASE
             Expression:
-              - TagKey: DBAccessScope-o-sv-tst1
+              - TagKey: DBAccessScope
                 TagValues:
                   - silver
         Permissions:
@@ -96,7 +88,7 @@ resources:
             CatalogId: !Ref AWS::AccountId
             ResourceType: TABLE
             Expression:
-              - TagKey: DBAccessScope-o-sv-tst1
+              - TagKey: DBAccessScope
                 TagValues:
                   - silver
         Permissions:
@@ -113,7 +105,7 @@ resources:
         Resource:
           LFTag:
             CatalogId: !Ref AWS::AccountId
-            TagKey: DBAccessScope-o-sv-tst1
+            TagKey: DBAccessScope
             TagValues:
               - "*"
         Permissions:
@@ -132,7 +124,7 @@ resources:
         Resource:
           LFTag:
             CatalogId: !Ref AWS::AccountId
-            TagKey: PII-o-sv-tst1
+            TagKey: PII
             TagValues:
               - "*"
         Permissions:
@@ -140,81 +132,11 @@ resources:
         PermissionsWithGrantOption:
           - ASSOCIATE
 
-    # Grant Glue Job role DATABASE permissions using TBAC
-    GlueJobRoleLFGrantDB:
-      Type: AWS::LakeFormation::PrincipalPermissions
-      DependsOn: DBAccessScopeTag
-      Properties:
-        Principal:
-          # Complex ARN from Stack 0: mix of hardcoded prefix, !Ref AccountId, 
-          # hardcoded 'role/', SSM from stack0 using self: variables
-          DataLakePrincipalIdentifier: !Sub 
-            - 'arn:aws:iam::${AccountId}:role/{{resolve:ssm:${GlueJobRoleNameKey}}}'
-            - AccountId: !Ref AWS::AccountId
-              GlueJobRoleNameKey: ${self:custom.ssmStack0Prefix}/role/glue-job/name
-        Resource:
-          LFTagPolicy:
-            CatalogId: !Ref AWS::AccountId
-            ResourceType: DATABASE
-            Expression:
-              - TagKey: DBAccessScope-o-sv-tst1
-                TagValues:
-                  - silver
-        Permissions:
-          - CREATE_TABLE
-          - ALTER
-          - DROP
-        PermissionsWithGrantOption: []
-
-    # Grant Glue Job role TABLE permissions using TBAC
-    GlueJobRoleLFGrantTable:
-      Type: AWS::LakeFormation::PrincipalPermissions
-      DependsOn: 
-        - DBAccessScopeTag
-        - PIITag
-      Properties:
-        Principal:
-          # Using SSM key variable built with stack0Name
-          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:${self:custom.ssmGlueJobRoleArnKey}}}'
-        Resource:
-          LFTagPolicy:
-            CatalogId: !Ref AWS::AccountId
-            ResourceType: TABLE
-            Expression:
-              - TagKey: DBAccessScope-o-sv-tst1
-                TagValues:
-                  - silver
-        Permissions:
-          - SELECT
-          - INSERT
-          - DELETE
-          - ALTER
-          - DESCRIBE
-        PermissionsWithGrantOption: []
-
-    # Grant LF Tag ASSOCIATE permissions to Glue Job role for PII tags
-    LFTagPermissionForGlueJobRolePII:
-      Type: AWS::LakeFormation::PrincipalPermissions
-      DependsOn: PIITag
-      Properties:
-        Principal:
-          # Mix: hardcoded '/gov-sv/', self: stack0Name, self: provider.stage, hardcoded path
-          DataLakePrincipalIdentifier: !Sub '{{resolve:ssm:/gov-sv/${self:custom.stack0Name}/${self:provider.stage}/role/glue-job/arn}}'
-        Resource:
-          LFTag:
-            CatalogId: !Ref AWS::AccountId
-            TagKey: PII-o-sv-tst1
-            TagValues:
-              - "*"
-        Permissions:
-          - ASSOCIATE
-        PermissionsWithGrantOption: []
-
   Outputs:
     DBAccessScopeTagKey:
-      Value: DBAccessScope-o-sv-tst1
+      Value: DBAccessScope
       Description: Database Access Scope Tag Key
 
     PIITagKey:
-      Value: PII-o-sv-tst1
+      Value: PII
       Description: PII Tag Key

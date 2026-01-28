@@ -206,4 +206,53 @@ export class AthenaService {
 
     return { query, results };
   }
+
+  /**
+   * Execute raw SQL query (for OAuth)
+   */
+  async executeRawQuery(
+    sqlQuery: string,
+    credentials: AssumedCredentials
+  ): Promise<{ query: string; results: string[][] }> {
+    try {
+      this.logger.info('Starting raw SQL query', { query: sqlQuery });
+
+      const client = this.getClient(credentials);
+      const command = new StartQueryExecutionCommand({
+        QueryString: sqlQuery,
+        QueryExecutionContext: {
+          Database: this.databaseName,
+        },
+        ResultConfiguration: {
+          OutputLocation: this.outputLocation,
+        },
+        WorkGroup: 'primary',
+      });
+
+      const response = await client.send(command);
+
+      if (!response.QueryExecutionId) {
+        throw new Error('No QueryExecutionId returned');
+      }
+
+      const queryExecutionId = response.QueryExecutionId;
+      this.logger.info('Raw query started successfully', { queryExecutionId });
+
+      const status = await this.waitForQueryCompletion(queryExecutionId, credentials);
+
+      if (status !== QueryExecutionState.SUCCEEDED) {
+        throw new LambdaError(500, `Query failed with status: ${status}`);
+      }
+
+      const results = await this.getQueryResults(queryExecutionId, credentials);
+
+      return { query: sqlQuery, results };
+    } catch (error) {
+      if (error instanceof LambdaError) {
+        throw error;
+      }
+      this.logger.error('Error executing raw query', error as Error);
+      throw new LambdaError(500, `Failed to execute query: ${(error as Error).message}`);
+    }
+  }
 }

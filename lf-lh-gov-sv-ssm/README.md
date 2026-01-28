@@ -1,6 +1,6 @@
 # Lake Formation Governance - Serverless Framework v3 (SSM Pattern)
 
-This implementation demonstrates a three-stack Lake Formation setup using Serverless Framework v3 with SSM Parameter Store for cross-stack references.
+This implementation demonstrates a two-stack Lake Formation setup using Serverless Framework v3 (free tier) with SSM Parameter Store for cross-stack references.
 
 ## Architecture
 
@@ -11,55 +11,25 @@ This implementation demonstrates a three-stack Lake Formation setup using Server
 - S3 Bucket for data storage
 - SSM Parameters for cross-stack references
 
-**Stack 0 (Glue Job):**
-- Glue ETL Job for data insertion
-- Glue Job Role with Lake Formation permissions
-- Demonstrates complex ARN construction using SSM from Stack 1
-- SSM Parameters for cross-stack references
-
 **Stack 2 (Permissions):**
 - Lake Formation Tags (DBAccessScope, PII)
 - Tag-based access control policies
-- Lake Formation permissions for crawler role and Glue Job role
-- References Stack 0 & 1 resources via SSM
-
-## Deployment Order
-
-**CRITICAL**: Must deploy in this exact order:
-
-```bash
-# 1. Deploy Stack 1 first (creates infrastructure)
-cd stack-1-resources
-serverless deploy --stage dev --region us-east-1
-
-# 2. Deploy Stack 0 (Glue Job - depends on Stack 1 SSM params)
-cd ../stack-0-glue-job
-# Upload the Glue script to S3 first
-aws s3 cp scripts/data_insert_job.py s3://lf-lh-silver-bkt-sv-dev/scripts/
-serverless deploy --stage dev --region us-east-1
-
-# 3. Deploy Stack 2 (Permissions - depends on Stack 0 & 1 SSM params)
-cd ../stack-2-permissions
-serverless deploy --stage dev --region us-east-1
-```
+- Lake Formation permissions for crawler role
+- References Stack 1 resources via SSM
 
 ## SSM Key Pattern
 
-**Stack 1** exports resources to SSM:
+Stack 1 exports resources to SSM using this pattern:
 ```
-/gov-sv/lf-lh-gov-sv-stack1/dev/database/silver/name
-/gov-sv/lf-lh-gov-sv-stack1/dev/role/crawler/arn
-/gov-sv/lf-lh-gov-sv-stack1/dev/role/crawler/name
-/gov-sv/lf-lh-gov-sv-stack1/dev/bucket/silver/name
-/gov-sv/lf-lh-gov-sv-stack1/dev/crawler/silver/name
+/gov-sv/{stack-name}/{env}/resourcetype/resourcename/attribute
 ```
 
-**Stack 0** exports Glue Job resources to SSM:
-```
-/gov-sv/lf-lh-gov-sv-stack0/dev/role/glue-job/arn
-/gov-sv/lf-lh-gov-sv-stack0/dev/role/glue-job/name
-/gov-sv/lf-lh-gov-sv-stack0/dev/job/name
-```
+**Example keys:**
+- `/gov-sv/lf-lh-gov-sv-stack1/dev/database/silver/name`
+- `/gov-sv/lf-lh-gov-sv-stack1/dev/role/crawler/arn`
+- `/gov-sv/lf-lh-gov-sv-stack1/dev/role/crawler/name`
+- `/gov-sv/lf-lh-gov-sv-stack1/dev/bucket/silver/name`
+- `/gov-sv/lf-lh-gov-sv-stack1/dev/crawler/silver/name`
 
 ## Stack 2 SSM Reference Pattern
 

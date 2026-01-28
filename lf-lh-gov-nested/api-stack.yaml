@@ -10,14 +10,10 @@ Parameters:
   LambdaFunctionArn:
     Type: String
     Description: ARN of the Lambda function to invoke
-  
-  OAuthLambdaFunctionArn:
-    Type: String
-    Description: ARN of the OAuth Lambda function
-    Default: ""
 
 Conditions:
-  HasOAuthLambda: !Not [!Equals [!Ref OAuthLambdaFunctionArn, ""]]
+  # OAuth endpoints use the same Lambda function, just different request format
+  HasOAuthEndpoint: !Equals ["true", "true"]  # Always true - OAuth handled by main Lambda
 
 Resources:
   # REST API
@@ -94,7 +90,6 @@ Resources:
   
   QueryOAuthResource:
     Type: AWS::ApiGateway::Resource
-    Condition: HasOAuthLambda
     Properties:
       RestApiId: !Ref AthenaQueryAPI
       ParentId: !GetAtt AthenaQueryAPI.RootResourceId
@@ -102,7 +97,6 @@ Resources:
 
   QueryOAuthMethod:
     Type: AWS::ApiGateway::Method
-    Condition: HasOAuthLambda
     Properties:
       RestApiId: !Ref AthenaQueryAPI
       ResourceId: !Ref QueryOAuthResource
@@ -112,7 +106,7 @@ Resources:
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OAuthLambdaFunctionArn}/invocations
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
         IntegrationResponses:
           - StatusCode: 200
       MethodResponses:
@@ -125,7 +119,6 @@ Resources:
   # CORS Preflight for OAuth endpoint
   QueryOAuthOptionsMethod:
     Type: AWS::ApiGateway::Method
-    Condition: HasOAuthLambda
     Properties:
       RestApiId: !Ref AthenaQueryAPI
       ResourceId: !Ref QueryOAuthResource
@@ -156,6 +149,7 @@ Resources:
     DependsOn:
       - QueryMethod
       - QueryIAMMethod
+      - QueryOAuthMethod
     Properties:
       RestApiId: !Ref AthenaQueryAPI
       StageName: !Ref Environment
@@ -219,15 +213,14 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*
 
-  # Lambda Permission for OAuth endpoint
+  # Lambda Permission for OAuth endpoint (uses same Lambda as main endpoint)
   APIGatewayInvokeOAuthLambdaPermission:
     Type: AWS::Lambda::Permission
-    Condition: HasOAuthLambda
     Properties:
-      FunctionName: !Ref OAuthLambdaFunctionArn
+      FunctionName: !Ref LambdaFunctionArn
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*/POST/query-oauth
 
 Outputs:
   APIEndpoint:
@@ -244,10 +237,7 @@ Outputs:
 
   APIEndpointOAuth:
     Description: API Gateway endpoint URL (OAuth/Cognito auth)
-    Value: !If 
-      - HasOAuthLambda
-      - !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-oauth
-      - "OAuth endpoint not configured"
+    Value: !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-oauth
     Export:
       Name: !Sub ${AWS::StackName}-APIEndpointOAuth
 

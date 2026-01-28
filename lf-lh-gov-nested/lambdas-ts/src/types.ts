@@ -3,8 +3,11 @@
  */
 
 export interface QueryRequest {
-  tableName: string;
+  tableName?: string;
   limit?: number;
+  query?: string;  // For OAuth: raw SQL query
+  username?: string;  // For OAuth: Cognito username
+  password?: string;  // For OAuth: Cognito password
 }
 
 export interface QueryResponse {
@@ -33,6 +36,11 @@ export interface EnvironmentConfig {
   databaseName: string;
   athenaOutputBucket: string;
   region: string;
+  cognitoUserPoolId?: string;
+  cognitoClientId?: string;
+  cognitoClientSecret?: string;
+  lfDevRoleArn?: string;
+  lfSuperRoleArn?: string;
 }
 
 export enum QueryStatus {

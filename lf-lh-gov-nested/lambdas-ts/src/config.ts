@@ -9,11 +9,15 @@ export const getConfig = (): EnvironmentConfig => {
     databaseName: process.env.DATABASE_NAME || '',
     athenaOutputBucket: process.env.ATHENA_OUTPUT_BUCKET || '',
     region: process.env.REGION || 'us-east-1',
+    cognitoUserPoolId: process.env.COGNITO_USER_POOL_ID,
+    cognitoClientId: process.env.COGNITO_CLIENT_ID,
+    cognitoClientSecret: process.env.COGNITO_CLIENT_SECRET,
+    lfDevRoleArn: process.env.LF_DEV_ROLE_ARN,
+    lfSuperRoleArn: process.env.LF_SUPER_ROLE_ARN,
   };
 
-  // Validate required environment variables
+  // Validate required environment variables (API_KEY_TABLE optional for OAuth-only)
   const missing: string[] = [];
-  if (!config.apiKeyTable) missing.push('API_KEY_TABLE');
   if (!config.databaseName) missing.push('DATABASE_NAME');
   if (!config.athenaOutputBucket) missing.push('ATHENA_OUTPUT_BUCKET');
 

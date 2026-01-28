@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda Stack - OAuth Client Credentials Token Validator
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: dev
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket with Lambda code
+
+  LambdaCodeKey:
+    Type: String
+    Description: S3 key for Lambda zip
+
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID
+
+  CognitoRegion:
+    Type: String
+    Description: Cognito region
+
+  LFDevRoleArn:
+    Type: String
+    Description: LF Dev Role ARN (for read scope)
+
+  LFSuperRoleArn:
+    Type: String
+    Description: LF Super Role ARN (for write/admin scope)
+
+  DatabaseName:
+    Type: String
+    Description: Glue database name
+
+Resources:
+  # ==========================================
+  # Lambda Execution Role
+  # ==========================================
+  ClientCredsLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-client-creds-lambda-role-${Environment}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AssumeRoles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Assume LF roles based on scope
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevRoleArn
+                  - !Ref LFSuperRoleArn
+        - PolicyName: AthenaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Athena query execution
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              # S3 for results
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+              # Glue metadata
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+
+  # ==========================================
+  # Lambda Function
+  # ==========================================
+  ClientCredsLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lf-client-creds-handler-${Environment}
+      Description: Validates OAuth client credentials tokens and executes Athena queries
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt ClientCredsLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: oauth-nested-stacks/lambda/oauth-client-creds-handler.zip
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          COGNITO_REGION: !Ref CognitoRegion
+          DATABASE_NAME: !Ref DatabaseName
+          ATHENA_OUTPUT_BUCKET: !Sub s3://aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/
+          REGION: !Ref AWS::Region
+          LF_DEV_ROLE_ARN: !Ref LFDevRoleArn
+          LF_SUPER_ROLE_ARN: !Ref LFSuperRoleArn
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationClientCreds
+
+  # CloudWatch Log Group
+  ClientCredsLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/lf-client-creds-handler-${Environment}
+      RetentionInDays: 7
+
+Outputs:
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt ClientCredsLambdaFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+
+  LambdaRoleArn:
+    Description: Lambda execution role ARN
+    Value: !GetAtt ClientCredsLambdaRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaRoleArn

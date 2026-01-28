@@ -116,6 +116,24 @@ Resources:
       UserPoolId: !Ref AthenaQueryUserPool
       Precedence: 2
 
+  # Store App Client Secret in Secrets Manager
+  CognitoClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub lf-cognito-client-secret-${Environment}
+      Description: Cognito App Client Secret for OAuth authentication
+      SecretString: !Sub |
+        {
+          "client_id": "${AthenaQueryAppClient}",
+          "client_secret": "PLACEHOLDER_TO_BE_UPDATED",
+          "user_pool_id": "${AthenaQueryUserPool}"
+        }
+      Tags:
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+
 Outputs:
   UserPoolId:
     Description: Cognito User Pool ID
@@ -146,3 +164,15 @@ Outputs:
     Value: !Ref AdminsGroup
     Export:
       Name: !Sub ${AWS::StackName}-AdminsGroup
+
+  ClientSecretArn:
+    Description: ARN of the Secrets Manager secret storing the App Client Secret
+    Value: !Ref CognitoClientSecret
+    Export:
+      Name: !Sub ${AWS::StackName}-ClientSecretArn
+
+  ClientSecretName:
+    Description: Name of the Secrets Manager secret (must be manually updated with actual client secret)
+    Value: !Sub lf-cognito-client-secret-${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-ClientSecretName

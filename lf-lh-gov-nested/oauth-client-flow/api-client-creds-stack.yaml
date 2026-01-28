@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Gateway Stack - OAuth Client Credentials Endpoint
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name
+    Default: dev
+
+  LambdaFunctionArn:
+    Type: String
+    Description: ARN of the Lambda function
+
+Resources:
+  # ==========================================
+  # REST API
+  # ==========================================
+  ClientCredsAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub lf-client-creds-api-${Environment}
+      Description: API for OAuth Client Credentials queries
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # ==========================================
+  # /query-client-creds Resource
+  # ==========================================
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ClientCredsAPI
+      ParentId: !GetAtt ClientCredsAPI.RootResourceId
+      PathPart: query-client-creds
+
+  # POST Method (Bearer Token Authentication)
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ClientCredsAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE  # Token validated in Lambda
+      ApiKeyRequired: false
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
+        IntegrationResponses:
+          - StatusCode: 200
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS Method (CORS)
+  QueryOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ClientCredsAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # ==========================================
+  # Deployment
+  # ==========================================
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - QueryOptionsMethod
+    Properties:
+      RestApiId: !Ref ClientCredsAPI
+      Description: !Sub Deployment for ${Environment}
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ClientCredsAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: !Ref Environment
+      Description: !Sub ${Environment} stage
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+
+  # Lambda Permission
+  APIInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ClientCredsAPI}/*/*/*
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${ClientCredsAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query-client-creds
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+
+  APIId:
+    Description: API Gateway ID
+    Value: !Ref ClientCredsAPI
+    Export:
+      Name: !Sub ${AWS::StackName}-APIId

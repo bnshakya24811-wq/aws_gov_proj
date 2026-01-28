@@ -9,10 +9,10 @@ provider:
   region: ${opt:region, 'us-east-1'}
 
 custom:
-  stackName: lf-lh-gov-sv-stack1-o-sv-tst1
-  dbName: lf_lh_silver_db_o_sv_tst1
-  bucketName: lf-lh-silver-bkt-o-sv-tst1-${self:provider.stage}
-  crawlerName: lf-lh-silver-crawler-o-sv-tst1
+  stackName: lf-lh-gov-sv-stack1
+  dbName: lf_lh_silver_db_sv
+  bucketName: lf-lh-silver-bkt-sv-${self:provider.stage}
+  crawlerName: lf-lh-silver-crawler-sv
   ssmPrefix: /gov-sv/${self:custom.stackName}/${self:provider.stage}
 
 resources:
@@ -35,7 +35,7 @@ resources:
     GlueCrawlerRole:
       Type: AWS::IAM::Role
       Properties:
-        RoleName: lf-lh-glue-crawler-role-o-sv-tst1-${self:provider.stage}
+        RoleName: lf-lh-glue-crawler-role-sv-${self:provider.stage}
         AssumeRolePolicyDocument:
           Version: '2012-10-17'
           Statement:

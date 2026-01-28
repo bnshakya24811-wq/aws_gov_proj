@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Main Stack - OAuth Client Credentials Flow (Nested Stacks)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+
+  TemplatesBucket:
+    Type: String
+    Description: S3 bucket containing nested stack templates
+    Default: deploymen-bkt
+
+  TemplatesBucketRegion:
+    Type: String
+    Description: Region of templates bucket
+    Default: ap-southeast-2
+
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket containing Lambda code
+    Default: deploymen-bkt
+
+  LambdaCodeKey:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/oauth-client-creds-handler.zip
+
+  # Reference to existing IAM stack roles
+  LFDevRoleArn:
+    Type: String
+    Description: ARN of the existing LF Dev User role
+    Default: ""
+
+  LFSuperRoleArn:
+    Type: String
+    Description: ARN of the existing LF Super User role
+    Default: ""
+
+  DatabaseName:
+    Type: String
+    Description: Glue database name
+    Default: ""
+
+  # Reference to pre-deployed Cognito stack
+  CognitoStackName:
+    Type: String
+    Description: Name of the pre-deployed Cognito Client Creds stack
+    Default: lf-cognito-client-creds-dev
+
+Resources:
+  # NOTE: Cognito stack must be deployed separately first!
+  # No nested Cognito stack - reference outputs from standalone stack
+
+  # ==========================================
+  # Lambda Stack - Client Credentials Validator
+  # ==========================================
+  LambdaClientCredsStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucket}.s3.${TemplatesBucketRegion}.amazonaws.com/oauth-nested-stacks/lambda-client-creds-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LambdaCodeBucket: !Ref LambdaCodeBucket
+        LambdaCodeKey: !Ref LambdaCodeKey
+        CognitoUserPoolId: !Sub '{{resolve:ssm:/lf-client-creds/${Environment}/cognito/user-pool-id}}'
+        CognitoRegion: !Ref AWS::Region
+        LFDevRoleArn: !Ref LFDevRoleArn
+        LFSuperRoleArn: !Ref LFSuperRoleArn
+        DatabaseName: !Ref DatabaseName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationOAuthClientCreds
+
+  # ==========================================
+  # API Gateway Stack - Client Credentials
+  # ==========================================
+  APIClientCredsStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: LambdaClientCredsStack
+    Properties:
+      TemplateURL: !Sub https://${TemplatesBucket}.s3.${TemplatesBucketRegion}.amazonaws.com/oauth-nested-stacks/api-client-creds-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LambdaFunctionArn: !GetAtt LambdaClientCredsStack.Outputs.LambdaFunctionArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationOAuthClientCreds
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint for client credentials flow
+    Value: !GetAtt APIClientCredsStack.Outputs.APIEndpoint
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt LambdaClientCredsStack.Outputs.LambdaFunctionArn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+
+  StackName:
+    Description: Stack name for reference
+    Value: !Ref AWS::StackName
+  
+  CognitoStackReference:
+    Description: Reference to standalone Cognito stack (deployed separately)
+    Value: !Ref CognitoStackName

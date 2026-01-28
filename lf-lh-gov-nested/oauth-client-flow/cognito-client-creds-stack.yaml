@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cognito Stack - Client Credentials Grant (Machine-to-Machine)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+
+Resources:
+  # ==========================================
+  # Cognito User Pool (for client management only)
+  # ==========================================
+  ClientCredsUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub lf-client-creds-pool-${Environment}
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true  # No user sign-up
+      UserPoolTags:
+        Project: LakeFormationClientCreds
+        Environment: !Ref Environment
+
+  # ==========================================
+  # Cognito Domain (for OAuth token endpoint)
+  # ==========================================
+  ClientCredsDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub lf-client-creds-${Environment}-${AWS::AccountId}
+      UserPoolId: !Ref ClientCredsUserPool
+
+  # ==========================================
+  # Resource Server (Defines OAuth Scopes)
+  # ==========================================
+  AthenaResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      UserPoolId: !Ref ClientCredsUserPool
+      Identifier: athena-api
+      Name: Athena Query API
+      Scopes:
+        - ScopeName: query.read
+          ScopeDescription: Read-only query access (limited permissions)
+        - ScopeName: query.write
+          ScopeDescription: Read and write query access (full permissions)
+        - ScopeName: query.admin
+          ScopeDescription: Administrative query access (super user permissions)
+
+  # ==========================================
+  # App Client: ETL Service (Write Access)
+  # ==========================================
+  ETLServiceClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: AthenaResourceServer
+    Properties:
+      ClientName: !Sub etl-service-client-${Environment}
+      UserPoolId: !Ref ClientCredsUserPool
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - client_credentials  # ONLY client credentials flow
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - athena-api/query.read   # Can read
+        - athena-api/query.write  # Can write
+      ExplicitAuthFlows: []  # No user auth flows
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 1  # 1 hour
+      TokenValidityUnits:
+        AccessToken: hours
+
+  # Store ETL client secret
+  ETLClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub lf-etl-client-secret-${Environment}
+      Description: ETL Service OAuth Client Secret
+      SecretString: !Sub |
+        {
+          "client_id": "${ETLServiceClient}",
+          "client_secret": "PLACEHOLDER_UPDATE_MANUALLY",
+          "scopes": "athena-api/query.read athena-api/query.write",
+          "grant_type": "client_credentials"
+        }
+      Tags:
+        - Key: Project
+          Value: LakeFormationClientCreds
+        - Key: Service
+          Value: ETL
+
+  # ==========================================
+  # App Client: Reporting Service (Read-Only)
+  # ==========================================
+  ReportingServiceClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: AthenaResourceServer
+    Properties:
+      ClientName: !Sub reporting-service-client-${Environment}
+      UserPoolId: !Ref ClientCredsUserPool
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - client_credentials
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - athena-api/query.read  # Read-only
+      ExplicitAuthFlows: []
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+
+  # Store Reporting client secret
+  ReportingClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub lf-reporting-client-secret-${Environment}
+      Description: Reporting Service OAuth Client Secret
+      SecretString: !Sub |
+        {
+          "client_id": "${ReportingServiceClient}",
+          "client_secret": "PLACEHOLDER_UPDATE_MANUALLY",
+          "scopes": "athena-api/query.read",
+          "grant_type": "client_credentials"
+        }
+      Tags:
+        - Key: Project
+          Value: LakeFormationClientCreds
+        - Key: Service
+          Value: Reporting
+
+  # ==========================================
+  # App Client: Monitoring Service (Read-Only)
+  # ==========================================
+  MonitoringServiceClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: AthenaResourceServer
+    Properties:
+      ClientName: !Sub monitoring-service-client-${Environment}
+      UserPoolId: !Ref ClientCredsUserPool
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - client_credentials
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - athena-api/query.read
+      ExplicitAuthFlows: []
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 2  # 2 hours for monitoring
+      TokenValidityUnits:
+        AccessToken: hours
+
+  # Store Monitoring client secret
+  MonitoringClientSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub lf-monitoring-client-secret-${Environment}
+      Description: Monitoring Service OAuth Client Secret
+      SecretString: !Sub |
+        {
+          "client_id": "${MonitoringServiceClient}",
+          "client_secret": "PLACEHOLDER_UPDATE_MANUALLY",
+          "scopes": "athena-api/query.read",
+          "grant_type": "client_credentials"
+        }
+      Tags:
+        - Key: Project
+          Value: LakeFormationClientCreds
+        - Key: Service
+          Value: Monitoring
+
+  # ==========================================
+  # SSM Parameters (for cross-stack reference)
+  # ==========================================
+  UserPoolIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /lf-client-creds/${Environment}/cognito/user-pool-id
+      Type: String
+      Value: !Ref ClientCredsUserPool
+      Description: Cognito User Pool ID for client credentials flow
+
+  TokenEndpointParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /lf-client-creds/${Environment}/cognito/token-endpoint
+      Type: String
+      Value: !Sub https://${ClientCredsDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/token
+      Description: OAuth token endpoint URL
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref ClientCredsUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt ClientCredsUserPool.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolArn
+
+  CognitoDomain:
+    Description: Cognito domain for OAuth endpoints
+    Value: !Ref ClientCredsDomain
+    Export:
+      Name: !Sub ${AWS::StackName}-CognitoDomain
+
+  TokenEndpoint:
+    Description: OAuth 2.0 Token Endpoint
+    Value: !Sub https://${ClientCredsDomain}.auth.${AWS::Region}.amazoncognito.com/oauth2/token
+    Export:
+      Name: !Sub ${AWS::StackName}-TokenEndpoint
+
+  ResourceServerIdentifier:
+    Description: Resource Server Identifier
+    Value: athena-api
+    Export:
+      Name: !Sub ${AWS::StackName}-ResourceServerIdentifier
+
+  ETLClientId:
+    Description: ETL Service Client ID
+    Value: !Ref ETLServiceClient
+    Export:
+      Name: !Sub ${AWS::StackName}-ETLClientId
+
+  ReportingClientId:
+    Description: Reporting Service Client ID
+    Value: !Ref ReportingServiceClient
+    Export:
+      Name: !Sub ${AWS::StackName}-ReportingClientId
+
+  MonitoringClientId:
+    Description: Monitoring Service Client ID
+    Value: !Ref MonitoringServiceClient
+    Export:
+      Name: !Sub ${AWS::StackName}-MonitoringClientId
+
+  ETLClientSecretArn:
+    Description: ETL Client Secret ARN
+    Value: !Ref ETLClientSecret
+
+  ReportingClientSecretArn:
+    Description: Reporting Client Secret ARN
+    Value: !Ref ReportingClientSecret
+
+  MonitoringClientSecretArn:
+    Description: Monitoring Client Secret ARN
+    Value: !Ref MonitoringClientSecret

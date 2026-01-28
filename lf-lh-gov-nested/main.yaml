@@ -33,6 +33,16 @@ Parameters:
     AllowedValues:
       - 'true'
       - 'false'
+  
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID (deploy Cognito stack separately first)
+    Default: ""
+  
+  CognitoAppClientId:
+    Type: String
+    Description: Cognito App Client ID (deploy Cognito stack separately first)
+    Default: ""
 
 Conditions:
   EnableOAuthStack: !Equals [!Ref EnableOAuth, 'true']
@@ -100,24 +110,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 4: Cognito Stack (optional - for OAuth authentication)
-  CognitoStack:
-    Type: AWS::CloudFormation::Stack
-    Condition: EnableOAuthStack
-    Properties:
-      TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/cognito-stack.yaml
-      Parameters:
-        Environment: !Ref Environment
-      TimeoutInMinutes: 10
-      Tags:
-        - Key: StackType
-          Value: Cognito
-        - Key: Project
-          Value: LakeFormationAccessControl
-        - Key: Environment
-          Value: !Ref Environment
-
-  # Stack 5: Lambda Stack (creates Lambda function for Athena queries)
+  # Stack 4: Lambda Stack (creates Lambda function for Athena queries)
   # Depends on IAM and Glue stacks
   LambdaStack:
     Type: AWS::CloudFormation::Stack
@@ -135,8 +128,8 @@ Resources:
         LambdaCodeS3Bucket: !Ref LambdaCodeS3Bucket
         LambdaCodeS3BucketRegion: !Ref AWS::Region
         LambdaCodeS3Key: lambda/athena-query-handler.zip
-        CognitoUserPoolId: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.UserPoolId, ""]
-        CognitoAppClientId: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.AppClientId, ""]
+        CognitoUserPoolId: !Ref CognitoUserPoolId
+        CognitoAppClientId: !Ref CognitoAppClientId
       TimeoutInMinutes: 10
       Tags:
         - Key: StackType
@@ -146,9 +139,9 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 6: API Gateway Stack (creates REST API with API keys)
+  # Stack 5: API Gateway Stack (creates REST API with API keys)
   # Depends on Lambda stack
-  APIStack:
+  APIStackV2:
     Type: AWS::CloudFormation::Stack
     DependsOn:
       - LambdaStack
@@ -157,7 +150,6 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         LambdaFunctionArn: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
-        OAuthLambdaFunctionArn: !If [EnableOAuthStack, !GetAtt LambdaStack.Outputs.OAuthLambdaFunctionArn, ""]
       TimeoutInMinutes: 10
       Tags:
         - Key: StackType
@@ -167,19 +159,19 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 7: DynamoDB Stack (creates API key mapping table)
+  # Stack 6: DynamoDB Stack (creates API key mapping table)
   # Depends on API stack to get API key IDs and IAM stack for user ARNs
   DynamoDBStack:
     Type: AWS::CloudFormation::Stack
     DependsOn:
-      - APIStack
+      - APIStackV2
       - IAMStack
     Properties:
       TemplateURL: !Sub https://${TemplateS3Bucket}.s3.amazonaws.com/${TemplateS3Prefix}/dynamodb-stack.yaml
       Parameters:
         Environment: !Ref Environment
-        DevUserAPIKeyId: !GetAtt APIStack.Outputs.DevUserAPIKeyId
-        SuperUserAPIKeyId: !GetAtt APIStack.Outputs.SuperUserAPIKeyId
+        DevUserAPIKeyId: !GetAtt APIStackV2.Outputs.DevUserAPIKeyId
+        SuperUserAPIKeyId: !GetAtt APIStackV2.Outputs.SuperUserAPIKeyId
         LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
         LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
       TimeoutInMinutes: 10
@@ -250,15 +242,15 @@ Outputs:
   # API Outputs
   APIEndpoint:
     Description: API Gateway endpoint URL for Athena queries
-    Value: !GetAtt APIStack.Outputs.APIEndpoint
+    Value: !GetAtt APIStackV2.Outputs.APIEndpoint
 
   APIEndpointIAM:
     Description: API Gateway endpoint URL for IAM authenticated queries
-    Value: !GetAtt APIStack.Outputs.APIEndpointIAM
+    Value: !GetAtt APIStackV2.Outputs.APIEndpointIAM
 
   APIEndpointOAuth:
     Description: API Gateway endpoint URL for OAuth authenticated queries
-    Value: !If [EnableOAuthStack, !GetAtt APIStack.Outputs.APIEndpointOAuth, "OAuth not enabled"]
+    Value: !If [EnableOAuthStack, !GetAtt APIStackV2.Outputs.APIEndpointOAuth, "OAuth not enabled"]
     Condition: EnableOAuthStack
 
   DevUserAPIKey:
@@ -269,15 +261,15 @@ Outputs:
     Description: Super User API Key Value (SENSITIVE - use to query with full permissions)
     Value: !GetAtt DynamoDBStack.Outputs.SuperUserAPIKeyValue
 
-  # Cognito Outputs
+  # Cognito Outputs (from parameters - deploy Cognito stack separately)
   CognitoUserPoolId:
-    Description: Cognito User Pool ID
-    Value: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.UserPoolId, "OAuth not enabled"]
+    Description: Cognito User Pool ID (from parameter)
+    Value: !If [EnableOAuthStack, !Ref CognitoUserPoolId, "OAuth not enabled"]
     Condition: EnableOAuthStack
 
   CognitoAppClientId:
-    Description: Cognito App Client ID
-    Value: !If [EnableOAuthStack, !GetAtt CognitoStack.Outputs.AppClientId, "OAuth not enabled"]
+    Description: Cognito App Client ID (from parameter)
+    Value: !If [EnableOAuthStack, !Ref CognitoAppClientId, "OAuth not enabled"]
     Condition: EnableOAuthStack
 
   # Stack References
@@ -297,14 +289,9 @@ Outputs:
     Description: Lambda Stack ID
     Value: !Ref LambdaStack
 
-  CognitoStackId:
-    Description: Cognito Stack ID
-    Value: !If [EnableOAuthStack, !Ref CognitoStack, "OAuth not enabled"]
-    Condition: EnableOAuthStack
-
   APIStackId:
     Description: API Stack ID
-    Value: !Ref APIStack
+    Value: !Ref APIStackV2
 
   DynamoDBStackId:
     Description: DynamoDB Stack ID
