@@ -1,0 +1,356 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Stack - API Gateway with API Key Authentication (Isolated Solution)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  LambdaFunctionArn:
+    Type: String
+    Description: ARN of the Lambda function to invoke
+  
+  LFDevUserRoleArn:
+    Type: String
+    Description: ARN of the Dev User role for Lake Formation
+  
+  LFSuperUserRoleArn:
+    Type: String
+    Description: ARN of the Super User role for Lake Formation
+  
+  APIKeyMappingTableName:
+    Type: String
+    Description: Name of DynamoDB table for API key mappings
+
+Resources:
+  # ==========================================
+  # REST API
+  # ==========================================
+  AthenaQueryApiKeyAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub lf-athena-apikey-api-apk-${Environment}
+      Description: API Gateway for querying Athena with Lake Formation via API Key
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      ApiKeySourceType: HEADER
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Component
+          Value: APIKeyGateway
+
+  # ==========================================
+  # API Resource (/query)
+  # ==========================================
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AthenaQueryApiKeyAPI
+      ParentId: !GetAtt AthenaQueryApiKeyAPI.RootResourceId
+      PathPart: query
+
+  # POST Method with API Key Required
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryApiKeyAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true
+      RequestParameters:
+        method.request.header.x-api-key: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunctionArn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # OPTIONS Method for CORS
+  QueryOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryApiKeyAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # ==========================================
+  # Lambda Permission
+  # ==========================================
+  ApiGatewayInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunctionArn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryApiKeyAPI}/*/*
+
+  # ==========================================
+  # API Deployment
+  # ==========================================
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - QueryOptionsMethod
+    Properties:
+      RestApiId: !Ref AthenaQueryApiKeyAPI
+      Description: !Sub Deployment for ${Environment} environment
+
+  # API Stage
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref AthenaQueryApiKeyAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: !Ref Environment
+      Description: !Sub ${Environment} stage for API Key authentication
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # ==========================================
+  # API Key & Usage Plan
+  # ==========================================
+  DevUserApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: APIStage
+    Properties:
+      Name: !Sub lf-apikey-dev-user-apk-${Environment}
+      Description: API Key for Dev User with limited Lake Formation permissions
+      Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: User
+          Value: DevUser
+
+  SuperUserApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn: APIStage
+    Properties:
+      Name: !Sub lf-apikey-super-user-apk-${Environment}
+      Description: API Key for Super User with full Lake Formation permissions
+      Enabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: User
+          Value: SuperUser
+
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: APIStage
+    Properties:
+      UsagePlanName: !Sub lf-apikey-usage-plan-apk-${Environment}
+      Description: Usage plan for API Key authentication
+      ApiStages:
+        - ApiId: !Ref AthenaQueryApiKeyAPI
+          Stage: !Ref Environment
+      Throttle:
+        BurstLimit: 100
+        RateLimit: 50
+      Quota:
+        Limit: 10000
+        Period: DAY
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  DevUserUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DevUserApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  SuperUserUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SuperUserApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # ==========================================
+  # Custom Resource to Populate DynamoDB
+  # ==========================================
+  PopulateAPIKeyMappingsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lf-populate-apikey-mappings-apk-${Environment}
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt PopulateAPIKeyMappingsFunctionRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          
+          def handler(event, context):
+              try:
+                  print(f"Event: {json.dumps(event)}")
+                  
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  dynamodb = boto3.resource('dynamodb')
+                  table = dynamodb.Table(event['ResourceProperties']['TableName'])
+                  apigateway = boto3.client('apigateway')
+                  
+                  # Get Dev User API Key value
+                  dev_key_response = apigateway.get_api_key(
+                      apiKey=event['ResourceProperties']['DevUserAPIKeyId'],
+                      includeValue=True
+                  )
+                  
+                  # Get Super User API Key value
+                  super_key_response = apigateway.get_api_key(
+                      apiKey=event['ResourceProperties']['SuperUserAPIKeyId'],
+                      includeValue=True
+                  )
+                  
+                  # Store Dev User mapping
+                  table.put_item(Item={
+                      'apiKey': dev_key_response['value'],
+                      'roleArn': event['ResourceProperties']['DevUserRoleArn'],
+                      'userName': 'dev-user-apk',
+                      'permissions': 'limited',
+                      'source': 'api-apikey-stack'
+                  })
+                  print(f"Dev User API Key mapped: {dev_key_response['value'][:10]}...")
+                  
+                  # Store Super User mapping
+                  table.put_item(Item={
+                      'apiKey': super_key_response['value'],
+                      'roleArn': event['ResourceProperties']['SuperUserRoleArn'],
+                      'userName': 'super-user-apk',
+                      'permissions': 'full',
+                      'source': 'api-apikey-stack'
+                  })
+                  print(f"Super User API Key mapped: {super_key_response['value'][:10]}...")
+                  
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                      'DevAPIKeyValue': dev_key_response['value'],
+                      'SuperAPIKeyValue': super_key_response['value']
+                  })
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  PopulateAPIKeyMappingsFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAndAPIGatewayAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${APIKeyMappingTableName}
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+
+  PopulateAPIKeyMappingsCustomResource:
+    Type: Custom::PopulateAPIKeyMappings
+    DependsOn:
+      - DevUserApiKey
+      - SuperUserApiKey
+    Properties:
+      ServiceToken: !GetAtt PopulateAPIKeyMappingsFunction.Arn
+      TableName: !Ref APIKeyMappingTableName
+      DevUserAPIKeyId: !Ref DevUserApiKey
+      SuperUserAPIKeyId: !Ref SuperUserApiKey
+      DevUserRoleArn: !Ref LFDevUserRoleArn
+      SuperUserRoleArn: !Ref LFSuperUserRoleArn
+
+Outputs:
+  ApiId:
+    Description: API Gateway ID
+    Value: !Ref AthenaQueryApiKeyAPI
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiId
+  
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${AthenaQueryApiKeyAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiEndpoint
+  
+  QueryEndpoint:
+    Description: Full URL for the /query endpoint
+    Value: !Sub https://${AthenaQueryApiKeyAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query
+    Export:
+      Name: !Sub ${AWS::StackName}-QueryEndpoint
+  
+  DevUserApiKeyId:
+    Description: ID of the Dev User API key
+    Value: !Ref DevUserApiKey
+    Export:
+      Name: !Sub ${AWS::StackName}-DevUserApiKeyId
+  
+  SuperUserApiKeyId:
+    Description: ID of the Super User API key
+    Value: !Ref SuperUserApiKey
+    Export:
+      Name: !Sub ${AWS::StackName}-SuperUserApiKeyId
+  
+  UsagePlanId:
+    Description: ID of the usage plan
+    Value: !Ref UsagePlan
+    Export:
+      Name: !Sub ${AWS::StackName}-UsagePlanId

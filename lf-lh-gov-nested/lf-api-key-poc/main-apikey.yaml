@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Root Stack - API Key Based Lake Formation Access Control POC
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the existing Glue database
+    Default: lf-lh-silver-db-o-sp5-dev
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+    Default: deploymen-bkt
+  
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/athena-query-apikey-dev.zip
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Environment Configuration
+        Parameters:
+          - Environment
+          - DatabaseName
+      - Label:
+          default: Lambda Configuration
+        Parameters:
+          - LambdaCodeS3Bucket
+          - LambdaCodeS3Key
+
+Resources:
+  # Stack 1: IAM Stack - Creates IAM roles for dev and super users
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/iam-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: IAM
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 2: Lambda Stack - Creates DynamoDB table and Lambda function
+  LambdaStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: IAMStack
+    Properties:
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/lambda-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+        DevUserAPIKeyId: placeholder
+        SuperUserAPIKeyId: placeholder
+        DatabaseName: !Ref DatabaseName
+        LambdaCodeS3Bucket: !Ref LambdaCodeS3Bucket
+        LambdaCodeS3Key: !Ref LambdaCodeS3Key
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: Lambda
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 3: API Gateway Stack - Creates API Gateway, API keys, and populates DynamoDB
+  APIStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: LambdaStack
+    Properties:
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/api-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LambdaFunctionArn: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
+        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+        APIKeyMappingTableName: !GetAtt LambdaStack.Outputs.APIKeyMappingTableName
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: APIGateway
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: Environment
+          Value: !Ref Environment
+
+Outputs:
+  # IAM Outputs
+  DevUserRoleArn:
+    Description: ARN of the Dev User Role
+    Value: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+    Export:
+      Name: !Sub ${AWS::StackName}-DevUserRoleArn
+
+  SuperUserRoleArn:
+    Description: ARN of the Super User Role
+    Value: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+    Export:
+      Name: !Sub ${AWS::StackName}-SuperUserRoleArn
+
+  # Lambda Outputs
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function
+    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
+
+  DynamoDBTableName:
+    Description: Name of the DynamoDB table for API key mappings
+    Value: !GetAtt LambdaStack.Outputs.APIKeyMappingTableName
+
+  # API Gateway Outputs
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !GetAtt APIStack.Outputs.QueryEndpoint
+
+  DevUserAPIKeyId:
+    Description: API Key ID for Dev User
+    Value: !GetAtt APIStack.Outputs.DevUserApiKeyId
+
+  SuperUserAPIKeyId:
+    Description: API Key ID for Super User
+    Value: !GetAtt APIStack.Outputs.SuperUserApiKeyId
+
+  # Quick Test Commands
+  TestCommand:
+    Description: Example curl command to test the API
+    Value: !Sub |
+      # Get API key values:
+      DEV_KEY=$(aws apigateway get-api-key --api-key ${APIStack.Outputs.DevUserApiKeyId} --include-value --query 'value' --output text --region ${AWS::Region})
+      SUPER_KEY=$(aws apigateway get-api-key --api-key ${APIStack.Outputs.SuperUserApiKeyId} --include-value --query 'value' --output text --region ${AWS::Region})
+      
+      # Test with Dev User:
+      curl -X POST ${APIStack.Outputs.QueryEndpoint} \
+        -H "x-api-key: $DEV_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"tableName": "YOUR_TABLE_NAME", "limit": 5}'
+      
+      # Test with Super User:
+      curl -X POST ${APIStack.Outputs.QueryEndpoint} \
+        -H "x-api-key: $SUPER_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"tableName": "YOUR_TABLE_NAME", "limit": 5}'

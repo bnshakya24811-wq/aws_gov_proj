@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Stack - Roles for API Key-based Lake Formation Access Control POC
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+
+Resources:
+  # Dev User Role (assumable by Lambda)
+  LFDevUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-apikey-dev-user-role-apk-${Environment}
+      Description: Dev user role with limited Lake Formation permissions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-apikey-lambda-role-apk-${Environment}
+      Policies:
+        - PolicyName: !Sub lf-apikey-dev-user-athena-access-apk-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource: '*'
+              
+              - Sid: GlueAccess
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartitions
+                Resource: '*'
+              
+              - Sid: AthenaAccess
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - athena:GetWorkGroup
+                Resource: '*'
+              
+              - Sid: LakeFormationAccess
+                Effect: Allow
+                Action:
+                  - lakeformation:GetDataAccess
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: UserType
+          Value: DevUser
+
+  # Super User Role (assumable by Lambda)
+  LFSuperUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-apikey-super-user-role-apk-${Environment}
+      Description: Super user role with full Lake Formation permissions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-apikey-lambda-role-apk-${Environment}
+      Policies:
+        - PolicyName: !Sub lf-apikey-super-user-athena-access-apk-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3FullAccess
+                Effect: Allow
+                Action: 's3:*'
+                Resource: '*'
+              
+              - Sid: GlueFullAccess
+                Effect: Allow
+                Action: 'glue:*'
+                Resource: '*'
+              
+              - Sid: AthenaFullAccess
+                Effect: Allow
+                Action: 'athena:*'
+                Resource: '*'
+              
+              - Sid: LakeFormationFullAccess
+                Effect: Allow
+                Action:
+                  - lakeformation:GetDataAccess
+                  - lakeformation:GrantPermissions
+                  - lakeformation:RevokePermissions
+                  - lakeformation:BatchGrantPermissions
+                  - lakeformation:BatchRevokePermissions
+                  - lakeformation:ListPermissions
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: UserType
+          Value: SuperUser
+
+Outputs:
+  LFDevUserRoleArn:
+    Description: ARN of the Dev User Role
+    Value: !GetAtt LFDevUserRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LFDevUserRoleArn
+
+  LFSuperUserRoleArn:
+    Description: ARN of the Super User Role
+    Value: !GetAtt LFSuperUserRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LFSuperUserRoleArn
+
+  LFDevUserRoleName:
+    Description: Name of the Dev User Role
+    Value: !Ref LFDevUserRole
+
+  LFSuperUserRoleName:
+    Description: Name of the Super User Role
+    Value: !Ref LFSuperUserRole

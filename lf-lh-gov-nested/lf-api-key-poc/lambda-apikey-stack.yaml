@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda Stack - API Key Authentication for Athena Queries (Isolated Solution)
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  LFDevUserArn:
+    Type: String
+    Description: ARN of the Dev User role to assume
+  
+  LFSuperUserArn:
+    Type: String
+    Description: ARN of the Super User role to assume
+  
+  DevUserAPIKeyId:
+    Type: String
+    Description: ID of the Dev User API key from API Gateway
+    Default: ""
+  
+  SuperUserAPIKeyId:
+    Type: String
+    Description: ID of the Super User API key from API Gateway
+    Default: ""
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue Database
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+  
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/athena-query-apikey.zip
+
+Resources:
+  # DynamoDB Table for API Key Mappings
+  APIKeyMappingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub lf-apikey-mappings-apk-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: apiKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: apiKey
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Component
+          Value: IsolatedAPIKey
+
+  # Lambda Execution Role
+  AthenaQueryApiKeyLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-athena-apikey-lambda-role-apk-${Environment}
+      Description: Execution role for API Key authenticated Athena query Lambda
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ApiKeyLambdaPolicy-apk-${Environment}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow assuming Lake Formation roles
+              - Sid: AssumeRoles
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevUserArn
+                  - !Ref LFSuperUserArn
+              
+              # DynamoDB read access for API key lookup
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: !GetAtt APIKeyMappingTable.Arn
+              
+              # Athena query execution
+              - Sid: AthenaAccess
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              
+              # S3 for Athena query results
+              - Sid: S3QueryResults
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
+                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+              
+              # Glue metadata access
+              - Sid: GlueAccess
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Component
+          Value: APIKeyLambda
+
+  # Lambda Function
+  AthenaQueryApiKeyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub lf-athena-apikey-handler-apk-${Environment}
+      Description: Lambda for querying Athena with Lake Formation permissions via API Key
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt AthenaQueryApiKeyLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          API_KEY_TABLE: !Ref APIKeyMappingTable
+          DATABASE_NAME: !Ref DatabaseName
+          ATHENA_OUTPUT_BUCKET: !Sub s3://aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/
+          REGION: !Ref AWS::Region
+          LOG_LEVEL: INFO
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Component
+          Value: APIKeyLambda
+
+  # CloudWatch Log Group
+  AthenaQueryApiKeyFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/lf-athena-apikey-handler-apk-${Environment}
+      RetentionInDays: 7
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+Outputs:
+  APIKeyMappingTableName:
+    Description: Name of the DynamoDB table for API key mappings
+    Value: !Ref APIKeyMappingTable
+    Export:
+      Name: !Sub ${AWS::StackName}-APIKeyMappingTableName
+  
+  APIKeyMappingTableArn:
+    Description: ARN of the DynamoDB table for API key mappings
+    Value: !GetAtt APIKeyMappingTable.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-APIKeyMappingTableArn
+  
+  LambdaFunctionArn:
+    Description: ARN of the API Key Lambda function
+    Value: !GetAtt AthenaQueryApiKeyFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+  
+  LambdaFunctionName:
+    Description: Name of the API Key Lambda function
+    Value: !Ref AthenaQueryApiKeyFunction
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionName
+  
+  LambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt AthenaQueryApiKeyLambdaRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaRoleArn
