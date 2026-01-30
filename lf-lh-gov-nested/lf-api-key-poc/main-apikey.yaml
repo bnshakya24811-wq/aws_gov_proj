@@ -16,15 +16,15 @@ Parameters:
     Description: Name of the existing Glue database
     Default: lf-lh-silver-db-o-sp5-dev
   
-  LambdaCodeS3Bucket:
+  LambdaArtifactsBucket:
     Type: String
-    Description: S3 bucket containing Lambda deployment package
-    Default: deploymen-bkt
+    Description: S3 bucket name for Lambda artifacts (created from bucket stack)
+    Default: lf-apikey-lambda-artifacts-dev-480399101976
   
   LambdaCodeS3Key:
     Type: String
     Description: S3 key for Lambda deployment package
-    Default: lambda/athena-query-apikey-dev.zip
+    Default: lambda/api-key-poc/athena-query-apikey-dev.zip
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -37,7 +37,7 @@ Metadata:
       - Label:
           default: Lambda Configuration
         Parameters:
-          - LambdaCodeS3Bucket
+          - LambdaArtifactsBucket
           - LambdaCodeS3Key
 
 Resources:
@@ -45,7 +45,7 @@ Resources:
   IAMStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/iam-apikey-stack.yaml
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/iam-apikey-stack.yaml
       Parameters:
         Environment: !Ref Environment
       TimeoutInMinutes: 10
@@ -62,7 +62,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/lambda-apikey-stack.yaml
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-apikey-stack.yaml
       Parameters:
         Environment: !Ref Environment
         LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
@@ -70,7 +70,7 @@ Resources:
         DevUserAPIKeyId: placeholder
         SuperUserAPIKeyId: placeholder
         DatabaseName: !Ref DatabaseName
-        LambdaCodeS3Bucket: !Ref LambdaCodeS3Bucket
+        LambdaCodeS3Bucket: !Ref LambdaArtifactsBucket
         LambdaCodeS3Key: !Ref LambdaCodeS3Key
       TimeoutInMinutes: 10
       Tags:
@@ -86,7 +86,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: LambdaStack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-nested-templates-o-sp5/lf-api-key/api-apikey-stack.yaml
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/api-apikey-stack.yaml
       Parameters:
         Environment: !Ref Environment
         LambdaFunctionArn: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
