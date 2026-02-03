@@ -230,7 +230,7 @@ Resources:
       Timeout: 300
       Code:
         S3Bucket: lf-apikey-lambda-artifacts-dev-480399101976
-        S3Key: lambda-apikey.zip
+        S3Key: lambda-apikey-v2.zip
       Environment:
         Variables:
           AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
