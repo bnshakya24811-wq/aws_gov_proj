@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lake Formation Governance Stack - Tags and Permissions for API Key POC
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue Database
+  
+  LFDevUserRoleArn:
+    Type: String
+    Description: ARN of the Dev User Role (for Lambda)
+  
+  LFSuperUserRoleArn:
+    Type: String
+    Description: ARN of the Super User Role (for Lambda)
+
+Resources:
+  # Dev User Role Permissions - Database Describe
+  LFDevUserRoleLFGrantDBDescribe:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp7-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - DESCRIBE
+      PermissionsWithGrantOption: []
+
+  # Dev User Role Permissions - Table Level (non-PII columns only)
+  LFDevUserRoleLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFDevUserRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp7-${Environment}
+              TagValues:
+                - silver
+            - TagKey: PII
+              TagValues:
+                - 'false'
+      Permissions:
+        - DESCRIBE
+        - SELECT
+      PermissionsWithGrantOption: []
+
+  # Super User Role Permissions - Database Level
+  LFSuperUserRoleLFGrant:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: DATABASE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp7-${Environment}
+              TagValues:
+                - silver
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+  # Super User Role Permissions - Table Level (all columns including PII)
+  LFSuperUserRoleLFGrantTable:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties:
+      Principal:
+        DataLakePrincipalIdentifier: !Ref LFSuperUserRoleArn
+      Resource:
+        LFTagPolicy:
+          CatalogId: !Ref AWS::AccountId
+          ResourceType: TABLE
+          Expression:
+            - TagKey: !Sub DBAccessScope-o-sp7-${Environment}
+              TagValues:
+                - silver
+            - TagKey: PII
+              TagValues:
+                - '*'
+      Permissions:
+        - ALL
+      PermissionsWithGrantOption: []
+
+Outputs:
+  DBAccessScopeTagKey:
+    Description: DBAccessScope Tag Key
+    Value: !Sub DBAccessScope-o-sp7-${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-DBAccessScopeTagKey
+
+  PIITagKey:
+    Description: PII Tag Key
+    Value: !Sub PII-o-sp7-${Environment}
+    Export:
+      Name: !Sub ${AWS::StackName}-PIITagKey

@@ -25,6 +25,16 @@ Parameters:
     Type: String
     Description: S3 key for Lambda deployment package
     Default: lambda/api-key-poc/athena-query-apikey-dev.zip
+  
+  AthenaBucketName:
+    Type: String
+    Description: S3 bucket name for Athena query results
+    Default: aws-athena-query-results-480399101976-ap-southeast-2
+  
+  AthenaOutputPrefix:
+    Type: String
+    Description: S3 prefix for Athena query results
+    Default: api-key-poc/
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -48,6 +58,8 @@ Resources:
       TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/iam-apikey-stack.yaml
       Parameters:
         Environment: !Ref Environment
+        AthenaBucketName: !Ref AthenaBucketName
+        AthenaOutputPrefix: !Ref AthenaOutputPrefix
       TimeoutInMinutes: 10
       Tags:
         - Key: StackType
@@ -57,7 +69,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 2: Lambda Stack - Creates DynamoDB table and Lambda function
+  # Stack 2: Lambda Stack - Creates Secrets Manager, DynamoDB table and Lambda function
   LambdaStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
@@ -67,11 +79,11 @@ Resources:
         Environment: !Ref Environment
         LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
         LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
-        DevUserAPIKeyId: placeholder
-        SuperUserAPIKeyId: placeholder
         DatabaseName: !Ref DatabaseName
         LambdaCodeS3Bucket: !Ref LambdaArtifactsBucket
         LambdaCodeS3Key: !Ref LambdaCodeS3Key
+        AthenaBucketName: !Ref AthenaBucketName
+        AthenaOutputPrefix: !Ref AthenaOutputPrefix
       TimeoutInMinutes: 10
       Tags:
         - Key: StackType
@@ -81,7 +93,7 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 3: API Gateway Stack - Creates API Gateway, API keys, and populates DynamoDB
+  # Stack 3: API Gateway Stack
   APIStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: LambdaStack
@@ -97,6 +109,26 @@ Resources:
       Tags:
         - Key: StackType
           Value: APIGateway
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Stack 4: Lake Formation Governance Stack
+  GovernanceStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: IAMStack
+    Properties:
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/governance-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        DatabaseName: !Ref DatabaseName
+        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: LakeFormationGovernance
         - Key: Project
           Value: LakeFormationAPIKeyPOC
         - Key: Environment
@@ -121,39 +153,48 @@ Outputs:
     Description: ARN of the Lambda function
     Value: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
 
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionName
+
   DynamoDBTableName:
     Description: Name of the DynamoDB table for API key mappings
     Value: !GetAtt LambdaStack.Outputs.APIKeyMappingTableName
+  
+  DevUserSecretArn:
+    Description: ARN of the Secrets Manager secret containing Dev User API key
+    Value: !GetAtt LambdaStack.Outputs.DevUserAPIKeySecretArn
+  
+  SuperUserSecretArn:
+    Description: ARN of the Secrets Manager secret containing Super User API key
+    Value: !GetAtt LambdaStack.Outputs.SuperUserAPIKeySecretArn
 
   # API Gateway Outputs
   APIEndpoint:
     Description: API Gateway endpoint URL
     Value: !GetAtt APIStack.Outputs.QueryEndpoint
 
-  DevUserAPIKeyId:
-    Description: API Key ID for Dev User
-    Value: !GetAtt APIStack.Outputs.DevUserApiKeyId
+  # DevUserAPIKeyId:
+  #   Description: API Key ID for Dev User
+  #   Value: !GetAtt APIStack.Outputs.DevUserApiKeyId
 
-  SuperUserAPIKeyId:
-    Description: API Key ID for Super User
-    Value: !GetAtt APIStack.Outputs.SuperUserApiKeyId
+  # SuperUserAPIKeyId:
+  #   Description: API Key ID for Super User
+  #   Value: !GetAtt APIStack.Outputs.SuperUserApiKeyId
 
-  # Quick Test Commands
-  TestCommand:
-    Description: Example curl command to test the API
+  # Test Command - For manual Lambda invocation
+  TestCommandManual:
+    Description: Test the Lambda function manually
     Value: !Sub |
-      # Get API key values:
-      DEV_KEY=$(aws apigateway get-api-key --api-key ${APIStack.Outputs.DevUserApiKeyId} --include-value --query 'value' --output text --region ${AWS::Region})
-      SUPER_KEY=$(aws apigateway get-api-key --api-key ${APIStack.Outputs.SuperUserApiKeyId} --include-value --query 'value' --output text --region ${AWS::Region})
+      # Get the API keys from Secrets Manager:
+      DEV_KEY=$(aws secretsmanager get-secret-value --secret-id ${LambdaStack.Outputs.DevUserAPIKeySecretArn} --query SecretString --output text | jq -r .apiKey)
+      SUPER_KEY=$(aws secretsmanager get-secret-value --secret-id ${LambdaStack.Outputs.SuperUserAPIKeySecretArn} --query SecretString --output text | jq -r .apiKey)
       
-      # Test with Dev User:
-      curl -X POST ${APIStack.Outputs.QueryEndpoint} \
-        -H "x-api-key: $DEV_KEY" \
-        -H "Content-Type: application/json" \
-        -d '{"tableName": "YOUR_TABLE_NAME", "limit": 5}'
+      # Test Lambda directly:
+      aws lambda invoke \
+        --function-name ${LambdaStack.Outputs.LambdaFunctionName} \
+        --payload '{"headers":{"x-api-key":"'$DEV_KEY'"},"body":"{\"tableName\":\"members\",\"limit\":5}"}' \
+        --region ${AWS::Region} \
+        response.json
       
-      # Test with Super User:
-      curl -X POST ${APIStack.Outputs.QueryEndpoint} \
-        -H "x-api-key: $SUPER_KEY" \
-        -H "Content-Type: application/json" \
-        -d '{"tableName": "YOUR_TABLE_NAME", "limit": 5}'
+      cat response.json

@@ -18,14 +18,18 @@ export class RoleService {
   /**
    * Assume the specified IAM role and return temporary credentials
    */
-  async assumeRole(roleArn: string): Promise<AssumedCredentials> {
+  async assumeRole(
+    roleArn: string, 
+    sessionName: string = 'lambda-session',
+    durationSeconds: number = 3600
+  ): Promise<AssumedCredentials> {
     try {
-      this.logger.info('Assuming IAM role', { roleArn });
+      this.logger.info('Assuming IAM role', { roleArn, sessionName });
 
       const command = new AssumeRoleCommand({
         RoleArn: roleArn,
-        RoleSessionName: 'athena-query-session',
-        DurationSeconds: 3600,
+        RoleSessionName: `lf-athena-${sessionName}`,
+        DurationSeconds: durationSeconds,
       });
 
       const response = await this.client.send(command);

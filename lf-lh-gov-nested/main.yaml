@@ -43,9 +43,18 @@ Parameters:
     Type: String
     Description: Cognito App Client ID (deploy Cognito stack separately first)
     Default: ""
+  
+  EnableApiKeyStack:
+    Type: String
+    Description: Enable isolated API Key authentication stack
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
 
 Conditions:
   EnableOAuthStack: !Equals [!Ref EnableOAuth, 'true']
+  EnableApiKey: !Equals [!Ref EnableApiKeyStack, 'true']
 
 Resources:
   # Stack 1: IAM Stack (creates users, roles, policies)
@@ -183,6 +192,63 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
+  # Stack 7: API Key Lambda Stack (creates DynamoDB table and Lambda function)
+  # Depends on IAM and Glue stacks only
+  ApiKeyLambdaStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableApiKey
+    DependsOn:
+      - IAMStack
+      - GlueStack
+    Properties:
+      TemplateURL: !Sub https://lf-nested-templates-o-sp5.s3.amazonaws.com/lf-nested-stacks/lambda-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+        DevUserAPIKeyId: placeholder
+        SuperUserAPIKeyId: placeholder
+        DatabaseName: !GetAtt GlueStack.Outputs.DatabaseName
+        LambdaCodeS3Bucket: !Ref LambdaCodeS3Bucket
+        LambdaCodeS3Key: lambda/athena-query-apikey-dev.zip
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: APIKeyLambda
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: IsolatedAPIKey
+
+  # Stack 8: API Key API Gateway Stack (creates API Gateway and API Keys, populates DynamoDB)
+  # Depends on Lambda stack for Lambda ARN and DynamoDB table
+  ApiKeyAPIStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableApiKey
+    DependsOn:
+      - IAMStack
+      - ApiKeyLambdaStack
+    Properties:
+      TemplateURL: !Sub https://lf-nested-templates-o-sp5.s3.amazonaws.com/lf-nested-stacks/api-apikey-stack.yaml
+      Parameters:
+        Environment: !Ref Environment
+        LambdaFunctionArn: !GetAtt ApiKeyLambdaStack.Outputs.LambdaFunctionArn
+        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
+        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
+        APIKeyMappingTableName: !GetAtt ApiKeyLambdaStack.Outputs.APIKeyMappingTableName
+      TimeoutInMinutes: 10
+      Tags:
+        - Key: StackType
+          Value: APIKeyGateway
+        - Key: Project
+          Value: LakeFormationAccessControl
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Component
+          Value: IsolatedAPIKey
+
 Outputs:
   # IAM Outputs
   LFDevUserArn:
@@ -296,3 +362,18 @@ Outputs:
   DynamoDBStackId:
     Description: DynamoDB Stack ID
     Value: !Ref DynamoDBStack
+  
+  ApiKeyLambdaStackId:
+    Description: API Key Lambda Stack ID
+    Value: !If [EnableApiKey, !Ref ApiKeyLambdaStack, "API Key Stack not enabled"]
+    Condition: EnableApiKey
+  
+  ApiKeyAPIStackId:
+    Description: API Key API Gateway Stack ID
+    Value: !If [EnableApiKey, !Ref ApiKeyAPIStack, "API Key Stack not enabled"]
+    Condition: EnableApiKey
+  
+  ApiKeyEndpoint:
+    Description: API Key authentication endpoint URL
+    Value: !If [EnableApiKey, !GetAtt ApiKeyAPIStack.Outputs.QueryEndpoint, "API Key Stack not enabled"]
+    Condition: EnableApiKey

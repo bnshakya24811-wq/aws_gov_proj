@@ -10,6 +10,16 @@ Parameters:
       - dev
       - staging
       - prod
+  
+  AthenaBucketName:
+    Type: String
+    Description: S3 bucket name for Athena query results
+    Default: aws-athena-query-results-480399101976-ap-southeast-2
+  
+  AthenaOutputPrefix:
+    Type: String
+    Description: S3 prefix for Athena query results
+    Default: api-key-poc/
 
 Resources:
   # Dev User Role (assumable by Lambda)
@@ -38,9 +48,28 @@ Resources:
                 Effect: Allow
                 Action:
                   - s3:GetObject
-                  - s3:ListBucket
                   - s3:PutObject
-                Resource: '*'
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}/${AthenaOutputPrefix}*
+              
+              - Sid: S3BucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}
+              
+              - Sid: S3DataAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - arn:aws:s3:::lf-lh-*
+                  - arn:aws:s3:::lf-lh-*/*
               
               - Sid: GlueAccess
                 Effect: Allow
@@ -96,10 +125,34 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Sid: S3FullAccess
+              - Sid: S3Access
                 Effect: Allow
-                Action: 's3:*'
-                Resource: '*'
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}/${AthenaOutputPrefix}*
+              
+              - Sid: S3BucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}
+              
+              - Sid: S3DataAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - arn:aws:s3:::lf-lh-*
+                  - arn:aws:s3:::lf-lh-*/*
               
               - Sid: GlueFullAccess
                 Effect: Allow

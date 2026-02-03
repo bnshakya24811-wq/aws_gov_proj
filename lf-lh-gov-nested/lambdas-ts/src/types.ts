@@ -25,10 +25,16 @@ export interface AssumedCredentials {
 }
 
 export interface ApiKeyMapping {
-  apiKey: string;
+  secretName: string;
   roleArn: string;
   userName: string;
-  permissions: string;
+  secretArn?: string;
+}
+
+export interface SecretValue {
+  apiKey: string;
+  userName: string;
+  apiKeyId?: string;
 }
 
 export interface EnvironmentConfig {
@@ -36,6 +42,8 @@ export interface EnvironmentConfig {
   databaseName: string;
   athenaOutputBucket: string;
   region: string;
+  environment: string;
+  secretKeyPrefix?: string;
   cognitoUserPoolId?: string;
   cognitoClientId?: string;
   cognitoClientSecret?: string;

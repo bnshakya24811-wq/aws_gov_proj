@@ -8,7 +8,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { getConfig } from './config';
 import { QueryRequest } from './types';
-import { ApiKeyService } from './services/apiKeyService';
+import { ApiKeyAuthService } from './services/apiKeyAuthService';
 import { IAMUserService } from './services/iamUserService';
 import { CognitoService } from './services/cognitoService';
 import { RoleService } from './services/roleService';
@@ -61,6 +61,7 @@ export const handler = async (
     let authMethod: string;
     let username: string | undefined;
     let userGroups: string[] = [];
+    let credentials: any; // Will hold assumed credentials
 
     // Determine Lake Formation role based on authentication method
     if (hasOAuthCredentials) {
@@ -98,11 +99,23 @@ export const handler = async (
         config.lfSuperRoleArn
       );
     } else if (apiKey) {
-      // API Key authentication
+      // API Key authentication - Using modular ApiKeyAuthService
       authMethod = 'API_KEY';
       logger.info('Using API key authentication');
-      const apiKeyService = new ApiKeyService(config.region, config.apiKeyTable);
-      roleArn = await apiKeyService.getRoleForApiKey(apiKey);
+      
+      const apiKeyAuthService = new ApiKeyAuthService({
+        region: config.region,
+        dynamoTableName: config.apiKeyTable,
+        environment: config.environment,
+        secretKeyPrefix: config.secretKeyPrefix,
+      });
+      
+      const authResult = await apiKeyAuthService.authenticate(apiKey);
+      roleArn = authResult.roleArn;
+      username = authResult.userName;
+      
+      // Credentials already obtained from authenticate()
+      credentials = authResult.credentials;
     } else {
       // IAM authentication
       authMethod = 'IAM';
@@ -118,8 +131,10 @@ export const handler = async (
       tableName: body.tableName,
     });
 
-    // Step 1: Assume the Lake Formation role
-    const credentials = await roleService.assumeRole(roleArn);
+    // Step 1: Assume the Lake Formation role (if not already done)
+    if (!credentials) {
+      credentials = await roleService.assumeRole(roleArn);
+    }
 
     // Step 2: Execute Athena query with assumed credentials
     let query: string;

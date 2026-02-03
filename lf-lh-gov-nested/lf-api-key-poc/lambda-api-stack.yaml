@@ -1,0 +1,463 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Combined Lambda and API Stack with AWS API Gateway API Keys stored in Secrets Manager
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  LFDevUserArn:
+    Type: String
+    Description: ARN of the Dev User Role
+  
+  LFSuperUserArn:
+    Type: String
+    Description: ARN of the Super User Role
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue database
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+  
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/api-key-poc/athena-query-apikey-dev.zip
+  
+  AthenaBucketName:
+    Type: String
+    Description: S3 bucket name for Athena query results
+  
+  AthenaOutputPrefix:
+    Type: String
+    Description: S3 prefix for Athena query results
+
+Resources:
+  # ==========================================
+  # DynamoDB Table - Maps Secret Name to Role ARN
+  # ==========================================
+  APIKeyMappingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub lf-apikey-mappings-v3-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: secretName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: secretName
+          KeyType: HASH
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # ==========================================
+  # API Gateway REST API
+  # ==========================================
+  AthenaQueryAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Description: !Sub API Gateway for Athena queries with Lake Formation TBAC - ${Environment}
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      ApiKeySourceType: HEADER
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Name
+          Value: !Sub lf-athena-apikey-api-apk-${Environment}
+
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ParentId: !GetAtt AthenaQueryAPI.RootResourceId
+      PathPart: query
+
+  # ==========================================
+  # API Gateway API Keys (created first, then stored in Secrets Manager)
+  # ==========================================
+  DevUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Description: !Sub API Key for Dev User - ${Environment}
+      Enabled: true
+
+  SuperUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Description: !Sub API Key for Super User - ${Environment}
+      Enabled: true
+
+  # ==========================================
+  # Lambda Function
+  # ==========================================
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:ListSecrets
+                Resource: '*'
+        - PolicyName: AssumeRoles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Ref LFDevUserArn
+                  - !Ref LFSuperUserArn
+        - PolicyName: AthenaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}
+                  - !Sub arn:aws:s3:::${AthenaBucketName}/*
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+
+  AthenaQueryFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: !Ref LambdaCodeS3Key
+      Environment:
+        Variables:
+          DYNAMODB_TABLE: !Ref APIKeyMappingTable
+          ENVIRONMENT: !Ref Environment
+          DATABASE_NAME: !Ref DatabaseName
+          ATHENA_OUTPUT_BUCKET: !Ref AthenaBucketName
+          AWS_REGION: !Ref AWS::Region
+          SECRET_KEY_PREFIX: lf-apikey-
+      Timeout: 300
+      MemorySize: 512
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ==========================================
+  # API Gateway Method - API Key Required: true (Gateway validates presence, Lambda validates value)
+  # ==========================================
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true  # Gateway ensures x-api-key header exists, Lambda validates the actual value
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AthenaQueryFunction.Arn}/invocations
+
+  QueryOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ApiGatewayInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AthenaQueryFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*/*
+
+  # ==========================================
+  # API Gateway Deployment
+  # ==========================================
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - QueryOptionsMethod
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: !Ref Environment
+
+  # ==========================================
+  # Custom Resource to Store API Keys in Secrets Manager and Create DynamoDB Mappings
+  # ==========================================
+  StoreAPIKeysFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt StoreAPIKeysFunctionRole.Arn
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          
+          apigateway = boto3.client('apigateway')
+          secretsmanager = boto3.client('secretsmanager')
+          dynamodb = boto3.client('dynamodb')
+          dynamodb = boto3.client('dynamodb')
+          
+          def handler(event, context):
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+                  
+                  # Get API key values from API Gateway
+                  dev_key_id = event['ResourceProperties']['DevAPIKeyId']
+                  super_key_id = event['ResourceProperties']['SuperAPIKeyId']
+                  
+                  dev_key_response = apigateway.get_api_key(apiKey=dev_key_id, includeValue=True)
+                  super_key_response = apigateway.get_api_key(apiKey=super_key_id, includeValue=True)
+                  
+                  dev_key_value = dev_key_response['value']
+                  super_key_value = super_key_response['value']
+                  
+                  env = event['ResourceProperties']['Environment']
+                  dev_secret_name = f"lf-apikey-dev-user-v3-{env}"
+                  super_secret_name = f"lf-apikey-super-user-v3-{env}"
+                  
+                  # Store API keys in Secrets Manager (only API key, no role)
+                  dev_secret_response = secretsmanager.create_secret(
+                      Name=dev_secret_name,
+                      Description='Dev User API Key',
+                      SecretString=json.dumps({
+                          'apiKey': dev_key_value,
+                          'userName': 'dev-user',
+                          'apiKeyId': dev_key_id
+                      }),
+                      Tags=[
+                          {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
+                          {'Key': 'Environment', 'Value': env}
+                      ]
+                  )
+                  
+                  super_secret_response = secretsmanager.create_secret(
+                      Name=super_secret_name,
+                      Description='Super User API Key',
+                      SecretString=json.dumps({
+                          'apiKey': super_key_value,
+                          'userName': 'super-user',
+                          'apiKeyId': super_key_id
+                      }),
+                      Tags=[
+                          {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
+                          {'Key': 'Environment', 'Value': env}
+                      ]
+                  )
+                  
+                  # Store mappings in DynamoDB: secretName -> roleArn
+                  table_name = event['ResourceProperties']['TableName']
+                  dynamodb.put_item(
+                      TableName=table_name,
+                      Item={
+                          'secretName': {'S': dev_secret_name},
+                          'secretArn': {'S': dev_secret_response['ARN']},
+                          'roleArn': {'S': event['ResourceProperties']['DevRoleArn']},
+                          'userName': {'S': 'dev-user'}
+                      }
+                  )
+                  dynamodb.put_item(
+                      TableName=table_name,
+                      Item={
+                          'secretName': {'S': super_secret_name},
+                          'secretArn': {'S': super_secret_response['ARN']},
+                          'roleArn': {'S': event['ResourceProperties']['SuperRoleArn']},
+                          'userName': {'S': 'super-user'}
+                      }
+                  )
+                  
+                  response_data = {
+                      'DevSecretArn': dev_secret_response['ARN'],
+                      'SuperSecretArn': super_secret_response['ARN'],
+                      'DevSecretName': dev_secret_name,
+                      'SuperSecretName': super_secret_name
+                  }
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  StoreAPIKeysFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManageSecretsAndDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+
+  # ==========================================
+  # Usage Plan (not required but good practice)
+  # ==========================================
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: APIStage
+    Properties:
+      ApiStages:
+        - ApiId: !Ref AthenaQueryAPI
+          Stage: !Ref Environment
+
+  UsagePlanKeyDev:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DevUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  UsagePlanKeySuper:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SuperUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # ==========================================
+  # Custom Resource Invocation
+  # ==========================================
+  StoreAPIKeysInSecrets:
+    Type: Custom::StoreAPIKeys
+    DependsOn:
+      - DevUserAPIKey
+      - SuperUserAPIKey
+      - APIKeyMappingTable
+    Properties:
+      ServiceToken: !GetAtt StoreAPIKeysFunction.Arn
+      DevAPIKeyId: !Ref DevUserAPIKey
+      SuperAPIKeyId: !Ref SuperUserAPIKey
+      DevRoleArn: !Ref LFDevUserArn
+      SuperRoleArn: !Ref LFSuperUserArn
+      TableName: !Ref APIKeyMappingTable
+      Environment: !Ref Environment
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+  
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt AthenaQueryFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+  
+  DevUserAPIKeyValue:
+    Description: Dev User API Key (retrieve from API Gateway console)
+    Value: !Ref DevUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-DevUserAPIKeyId
+  
+  SuperUserAPIKeyValue:
+    Description: Super User API Key (retrieve from API Gateway console)
+    Value: !Ref SuperUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-SuperUserAPIKeyId
+  
+  DynamoDBTableName:
+    Description: DynamoDB table name for secret to role mappings
+    Value: !Ref APIKeyMappingTable
+    Export:
+      Name: !Sub ${AWS::StackName}-DynamoDBTableName

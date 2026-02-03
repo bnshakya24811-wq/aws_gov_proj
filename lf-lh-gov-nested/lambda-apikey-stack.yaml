@@ -43,7 +43,7 @@ Resources:
   APIKeyMappingTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub lf-apikey-mappings-apk-${Environment}
+      TableName: !Sub lf-apikey-mappings-isolated-${Environment}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: apiKey
@@ -63,7 +63,7 @@ Resources:
   AthenaQueryApiKeyLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub lf-athena-apikey-lambda-role-apk-${Environment}
+      RoleName: !Sub lf-athena-apikey-lambda-role-${Environment}
       Description: Execution role for API Key authenticated Athena query Lambda
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -75,7 +75,7 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: !Sub ApiKeyLambdaPolicy-apk-${Environment}
+        - PolicyName: !Sub ApiKeyLambdaPolicy-${Environment}
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -136,7 +136,7 @@ Resources:
   AthenaQueryApiKeyFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub lf-athena-apikey-handler-apk-${Environment}
+      FunctionName: !Sub lf-athena-apikey-handler-${Environment}
       Description: Lambda for querying Athena with Lake Formation permissions via API Key
       Runtime: nodejs20.x
       Handler: index.handler
@@ -165,7 +165,7 @@ Resources:
   AthenaQueryApiKeyFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/lf-athena-apikey-handler-apk-${Environment}
+      LogGroupName: !Sub /aws/lambda/lf-athena-apikey-handler-${Environment}
       RetentionInDays: 7
       Tags:
         - Key: Environment

@@ -5,10 +5,12 @@ import { EnvironmentConfig } from './types';
 
 export const getConfig = (): EnvironmentConfig => {
   const config: EnvironmentConfig = {
-    apiKeyTable: process.env.API_KEY_TABLE || '',
+    apiKeyTable: process.env.DYNAMODB_TABLE || process.env.API_KEY_TABLE || '',
     databaseName: process.env.DATABASE_NAME || '',
     athenaOutputBucket: process.env.ATHENA_OUTPUT_BUCKET || '',
-    region: process.env.REGION || 'us-east-1',
+    region: process.env.AWS_REGION || process.env.REGION || 'us-east-1',
+    environment: process.env.ENVIRONMENT || 'dev',
+    secretKeyPrefix: process.env.SECRET_KEY_PREFIX || 'lf-apikey-',
     cognitoUserPoolId: process.env.COGNITO_USER_POOL_ID,
     cognitoClientId: process.env.COGNITO_CLIENT_ID,
     cognitoClientSecret: process.env.COGNITO_CLIENT_SECRET,
