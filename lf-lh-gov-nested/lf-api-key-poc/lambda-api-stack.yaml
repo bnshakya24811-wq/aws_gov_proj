@@ -109,7 +109,7 @@ Resources:
   AthenaQueryFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: nodejs20.x
+      Runtime: python3.11
       Handler: index.handler
       Role: !Ref LambdaExecutionRoleArn
       Code:
@@ -121,7 +121,7 @@ Resources:
           ENVIRONMENT: !Ref Environment
           DATABASE_NAME: !Ref DatabaseName
           ATHENA_OUTPUT_BUCKET: !Ref AthenaBucketName
-          REGION: !Ref AWS::Region
+          ATHENA_OUTPUT_PREFIX: !Ref AthenaOutputPrefix
           SECRET_KEY_PREFIX: lf-apikey-
       Timeout: 300
       MemorySize: 512
