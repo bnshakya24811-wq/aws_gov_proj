@@ -74,7 +74,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-api-stack.yaml
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-api-stack.yaml?v=2.7
       Parameters:
         Environment: !Ref Environment
         LambdaExecutionRoleArn: !GetAtt IAMStack.Outputs.LambdaExecutionRoleArn
@@ -163,3 +163,4 @@ Outputs:
         -H "x-api-key: $DEV_KEY" \
         -H "Content-Type: application/json" \
         -d '{"tableName":"members","limit":5}'
+

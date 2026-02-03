@@ -19,6 +19,11 @@ Parameters:
     Type: String
     Description: ARN of the Super User Role
   
+  LFAnalystUserArn:
+    Type: String
+    Description: ARN of the Analyst User Role
+    Default: ""
+  
   DatabaseName:
     Type: String
     Description: Name of the Glue database
@@ -52,9 +57,18 @@ Resources:
       AttributeDefinitions:
         - AttributeName: secretName
           AttributeType: S
+        - AttributeName: groupLabel
+          AttributeType: S
       KeySchema:
         - AttributeName: secretName
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GroupLabelIndex
+          KeySchema:
+            - AttributeName: groupLabel
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment
@@ -101,6 +115,13 @@ Resources:
     Properties:
       Name: !Sub lf-apikey-super-user-v3-${Environment}
       Description: !Sub API Key for Super User - ${Environment}
+      Enabled: true
+
+  AnalystUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-apikey-analyst-user-v3-${Environment}
+      Description: !Sub API Key for Analyst User - ${Environment}
       Enabled: true
 
   # ==========================================
@@ -216,87 +237,114 @@ Resources:
           apigateway = boto3.client('apigateway')
           secretsmanager = boto3.client('secretsmanager')
           dynamodb = boto3.client('dynamodb')
-          dynamodb = boto3.client('dynamodb')
           
           def handler(event, context):
               try:
-                  if event['RequestType'] == 'Delete':
+                  request_type = event['RequestType']
+                  
+                  if request_type == 'Delete':
+                      # Cleanup secrets on stack deletion
+                      try:
+                          mappings = event['ResourceProperties']['APIKeyMappings']
+                          for mapping in mappings:
+                              secret_name = mapping['SecretName']
+                              try:
+                                  secretsmanager.delete_secret(
+                                      SecretId=secret_name,
+                                      ForceDeleteWithoutRecovery=True
+                                  )
+                                  print(f"Deleted secret: {secret_name}")
+                              except secretsmanager.exceptions.ResourceNotFoundException:
+                                  print(f"Secret {secret_name} already deleted")
+                      except Exception as e:
+                          print(f"Cleanup warning: {str(e)}")
+                      
                       cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
                       return
                   
-                  # Get API key values from API Gateway
-                  dev_key_id = event['ResourceProperties']['DevAPIKeyId']
-                  super_key_id = event['ResourceProperties']['SuperAPIKeyId']
-                  
-                  dev_key_response = apigateway.get_api_key(apiKey=dev_key_id, includeValue=True)
-                  super_key_response = apigateway.get_api_key(apiKey=super_key_id, includeValue=True)
-                  
-                  dev_key_value = dev_key_response['value']
-                  super_key_value = super_key_response['value']
-                  
-                  env = event['ResourceProperties']['Environment']
-                  dev_secret_name = f"lf-apikey-dev-user-v3-{env}"
-                  super_secret_name = f"lf-apikey-super-user-v3-{env}"
-                  
-                  # Store API keys in Secrets Manager (only API key, no role)
-                  dev_secret_response = secretsmanager.create_secret(
-                      Name=dev_secret_name,
-                      Description='Dev User API Key',
-                      SecretString=json.dumps({
-                          'apiKey': dev_key_value,
-                          'userName': 'dev-user',
-                          'apiKeyId': dev_key_id
-                      }),
-                      Tags=[
-                          {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
-                          {'Key': 'Environment', 'Value': env}
-                      ]
-                  )
-                  
-                  super_secret_response = secretsmanager.create_secret(
-                      Name=super_secret_name,
-                      Description='Super User API Key',
-                      SecretString=json.dumps({
-                          'apiKey': super_key_value,
-                          'userName': 'super-user',
-                          'apiKeyId': super_key_id
-                      }),
-                      Tags=[
-                          {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
-                          {'Key': 'Environment', 'Value': env}
-                      ]
-                  )
-                  
-                  # Store mappings in DynamoDB: secretName -> roleArn
+                  # Process all API key mappings
+                  mappings = event['ResourceProperties']['APIKeyMappings']
                   table_name = event['ResourceProperties']['TableName']
-                  dynamodb.put_item(
-                      TableName=table_name,
-                      Item={
-                          'secretName': {'S': dev_secret_name},
-                          'secretArn': {'S': dev_secret_response['ARN']},
-                          'roleArn': {'S': event['ResourceProperties']['DevRoleArn']},
-                          'userName': {'S': 'dev-user'}
-                      }
-                  )
-                  dynamodb.put_item(
-                      TableName=table_name,
-                      Item={
-                          'secretName': {'S': super_secret_name},
-                          'secretArn': {'S': super_secret_response['ARN']},
-                          'roleArn': {'S': event['ResourceProperties']['SuperRoleArn']},
-                          'userName': {'S': 'super-user'}
-                      }
-                  )
+                  env = event['ResourceProperties']['Environment']
+                  response_data = {}
                   
-                  response_data = {
-                      'DevSecretArn': dev_secret_response['ARN'],
-                      'SuperSecretArn': super_secret_response['ARN'],
-                      'DevSecretName': dev_secret_name,
-                      'SuperSecretName': super_secret_name
-                  }
+                  print(f"Processing {len(mappings)} API key mappings")
+                  
+                  for mapping in mappings:
+                      api_key_id = mapping['APIKeyId']
+                      user_name = mapping['UserName']
+                      group_label = mapping['GroupLabel']
+                      role_arn = mapping['RoleArn']
+                      secret_name = mapping['SecretName']
+                      
+                      # Get API key value from API Gateway
+                      print(f"Retrieving API key for {user_name}...")
+                      key_response = apigateway.get_api_key(apiKey=api_key_id, includeValue=True)
+                      api_key_value = key_response['value']
+                      
+                      # Store in Secrets Manager
+                      try:
+                          secret_response = secretsmanager.create_secret(
+                              Name=secret_name,
+                              Description=f'{user_name} API Key - {group_label} group',
+                              SecretString=json.dumps({
+                                  'apiKey': api_key_value,
+                                  'userName': user_name,
+                                  'groupLabel': group_label,
+                                  'apiKeyId': api_key_id
+                              }),
+                              Tags=[
+                                  {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
+                                  {'Key': 'GroupLabel', 'Value': group_label},
+                                  {'Key': 'Environment', 'Value': env},
+                                  {'Key': 'ManagedBy', 'Value': 'CloudFormation'},
+                                  {'Key': 'Project', 'Value': 'LakeFormationAccessControl'}
+                              ]
+                          )
+                          secret_arn = secret_response['ARN']
+                          print(f"Created secret: {secret_name}")
+                      except secretsmanager.exceptions.ResourceExistsException:
+                          # Update existing secret (handles stack updates)
+                          print(f"Secret {secret_name} exists, updating...")
+                          secretsmanager.put_secret_value(
+                              SecretId=secret_name,
+                              SecretString=json.dumps({
+                                  'apiKey': api_key_value,
+                                  'userName': user_name,
+                                  'groupLabel': group_label,
+                                  'apiKeyId': api_key_id
+                              })
+                          )
+                          secret_arn = secretsmanager.describe_secret(SecretId=secret_name)['ARN']
+                          print(f"Updated secret: {secret_name}")
+                      
+                      # Store mapping in DynamoDB: secretName -> roleArn
+                      dynamodb.put_item(
+                          TableName=table_name,
+                          Item={
+                              'secretName': {'S': secret_name},
+                              'secretArn': {'S': secret_arn},
+                              'roleArn': {'S': role_arn},
+                              'userName': {'S': user_name},
+                              'groupLabel': {'S': group_label},
+                              'apiKeyId': {'S': api_key_id}
+                          }
+                      )
+                      print(f"Created DynamoDB mapping: {secret_name} -> {group_label} -> {role_arn}")
+                      
+                      # Add to response data
+                      response_data[f'{user_name}SecretArn'] = secret_arn
+                      response_data[f'{user_name}SecretName'] = secret_name
+                      response_data[f'{user_name}GroupLabel'] = group_label
+                  
+                  response_data['ProcessedCount'] = len(mappings)
+                  print(f"Successfully processed {len(mappings)} API keys")
                   cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
+                  
               except Exception as e:
                   print(f"Error: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
                   cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
 
   StoreAPIKeysFunctionRole:
@@ -325,6 +373,8 @@ Resources:
                   - secretsmanager:CreateSecret
                   - secretsmanager:PutSecretValue
                   - secretsmanager:TagResource
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:DeleteSecret
                 Resource: '*'
               - Effect: Allow
                 Action:
@@ -356,23 +406,48 @@ Resources:
       KeyType: API_KEY
       UsagePlanId: !Ref UsagePlan
 
+  UsagePlanKeyAnalyst:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref AnalystUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
   # ==========================================
   # Custom Resource Invocation
+  # SINGLE SOURCE OF TRUTH: All mapping logic here
   # ==========================================
   StoreAPIKeysInSecrets:
     Type: Custom::StoreAPIKeys
     DependsOn:
       - DevUserAPIKey
       - SuperUserAPIKey
+      - AnalystUserAPIKey
       - APIKeyMappingTable
     Properties:
       ServiceToken: !GetAtt StoreAPIKeysFunction.Arn
-      DevAPIKeyId: !Ref DevUserAPIKey
-      SuperAPIKeyId: !Ref SuperUserAPIKey
-      DevRoleArn: !Ref LFDevUserArn
-      SuperRoleArn: !Ref LFSuperUserArn
       TableName: !Ref APIKeyMappingTable
       Environment: !Ref Environment
+      Version: "2.7"  # Force custom resource update
+      # Declarative array: APIKeyId + UserName + GroupLabel + RoleArn + SecretName
+      APIKeyMappings:
+        - APIKeyId: !Ref DevUserAPIKey
+          UserName: dev-user
+          GroupLabel: developer
+          RoleArn: !Ref LFDevUserArn
+          SecretName: !Sub lf-apikey-dev-user-v3-${Environment}
+        
+        - APIKeyId: !Ref SuperUserAPIKey
+          UserName: super-user
+          GroupLabel: admin
+          RoleArn: !Ref LFSuperUserArn
+          SecretName: !Sub lf-apikey-super-user-v3-${Environment}
+        
+        - APIKeyId: !Ref AnalystUserAPIKey
+          UserName: analyst-user
+          GroupLabel: analyst
+          RoleArn: !Ref LFSuperUserArn
+          SecretName: !Sub lf-apikey-analyst-user-v3-${Environment}
 
 Outputs:
   APIEndpoint:
@@ -399,14 +474,27 @@ Outputs:
     Export:
       Name: !Sub ${AWS::StackName}-SuperUserAPIKeyId
   
+  AnalystUserAPIKeyValue:
+    Description: Analyst User API Key (retrieve from API Gateway console)
+    Value: !Ref AnalystUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-AnalystUserAPIKeyId
+  
   DynamoDBTableName:
     Description: DynamoDB table name for secret to role mappings
     Value: !Ref APIKeyMappingTable
     Export:
       Name: !Sub ${AWS::StackName}-DynamoDBTableName
   
+  APIKeyMappingInfo:
+    Description: Summary of API key mappings created
+    Value: !Sub |
+      dev-user (${DevUserAPIKey}): developer group -> ${LFDevUserArn}
+      super-user (${SuperUserAPIKey}): admin group -> ${LFSuperUserArn}
+  
   LambdaExecutionRoleArn:
     Description: Lambda execution role ARN that needs to assume LF roles
     Value: !Ref LambdaExecutionRoleArn
     Export:
       Name: !Sub ${AWS::StackName}-LambdaExecutionRoleArn
+

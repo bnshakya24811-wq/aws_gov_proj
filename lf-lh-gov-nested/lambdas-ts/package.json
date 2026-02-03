@@ -9,6 +9,7 @@
     "clean": "rm -rf dist lambda.zip"
   },
   "dependencies": {
+    "@aws-sdk/client-api-gateway": "^3.981.0",
     "@aws-sdk/client-athena": "^3.515.0",
     "@aws-sdk/client-cognito-identity-provider": "^3.515.0",
     "@aws-sdk/client-dynamodb": "^3.515.0",
