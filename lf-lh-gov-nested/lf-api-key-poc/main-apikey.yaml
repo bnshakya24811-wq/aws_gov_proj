@@ -69,14 +69,15 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 2: Lambda Stack - Creates Secrets Manager, DynamoDB table and Lambda function
-  LambdaStack:
+  # Stack 2: Combined Lambda + API Stack - Creates API Gateway, Lambda, DynamoDB, Secrets Manager, API Keys
+  LambdaAPIStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-apikey-stack.yaml
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-api-stack.yaml
       Parameters:
         Environment: !Ref Environment
+        LambdaExecutionRoleArn: !GetAtt IAMStack.Outputs.LambdaExecutionRoleArn
         LFDevUserArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
         LFSuperUserArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
         DatabaseName: !Ref DatabaseName
@@ -84,37 +85,16 @@ Resources:
         LambdaCodeS3Key: !Ref LambdaCodeS3Key
         AthenaBucketName: !Ref AthenaBucketName
         AthenaOutputPrefix: !Ref AthenaOutputPrefix
-      TimeoutInMinutes: 10
+      TimeoutInMinutes: 15
       Tags:
         - Key: StackType
-          Value: Lambda
+          Value: LambdaAPI
         - Key: Project
           Value: LakeFormationAPIKeyPOC
         - Key: Environment
           Value: !Ref Environment
 
-  # Stack 3: API Gateway Stack
-  APIStack:
-    Type: AWS::CloudFormation::Stack
-    DependsOn: LambdaStack
-    Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/api-apikey-stack.yaml
-      Parameters:
-        Environment: !Ref Environment
-        LambdaFunctionArn: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
-        LFDevUserRoleArn: !GetAtt IAMStack.Outputs.LFDevUserRoleArn
-        LFSuperUserRoleArn: !GetAtt IAMStack.Outputs.LFSuperUserRoleArn
-        APIKeyMappingTableName: !GetAtt LambdaStack.Outputs.APIKeyMappingTableName
-      TimeoutInMinutes: 10
-      Tags:
-        - Key: StackType
-          Value: APIGateway
-        - Key: Project
-          Value: LakeFormationAPIKeyPOC
-        - Key: Environment
-          Value: !Ref Environment
-
-  # Stack 4: Lake Formation Governance Stack
+  # Stack 3: Lake Formation Governance Stack
   GovernanceStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
@@ -149,52 +129,37 @@ Outputs:
       Name: !Sub ${AWS::StackName}-SuperUserRoleArn
 
   # Lambda Outputs
+  # Lambda and API Outputs
   LambdaFunctionArn:
     Description: ARN of the Lambda function
-    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionArn
-
-  LambdaFunctionName:
-    Description: Name of the Lambda function
-    Value: !GetAtt LambdaStack.Outputs.LambdaFunctionName
+    Value: !GetAtt LambdaAPIStack.Outputs.LambdaFunctionArn
 
   DynamoDBTableName:
     Description: Name of the DynamoDB table for API key mappings
-    Value: !GetAtt LambdaStack.Outputs.APIKeyMappingTableName
-  
-  DevUserSecretArn:
-    Description: ARN of the Secrets Manager secret containing Dev User API key
-    Value: !GetAtt LambdaStack.Outputs.DevUserAPIKeySecretArn
-  
-  SuperUserSecretArn:
-    Description: ARN of the Secrets Manager secret containing Super User API key
-    Value: !GetAtt LambdaStack.Outputs.SuperUserAPIKeySecretArn
+    Value: !GetAtt LambdaAPIStack.Outputs.DynamoDBTableName
 
-  # API Gateway Outputs
   APIEndpoint:
     Description: API Gateway endpoint URL
-    Value: !GetAtt APIStack.Outputs.QueryEndpoint
+    Value: !GetAtt LambdaAPIStack.Outputs.APIEndpoint
 
-  # DevUserAPIKeyId:
-  #   Description: API Key ID for Dev User
-  #   Value: !GetAtt APIStack.Outputs.DevUserApiKeyId
+  DevUserAPIKeyId:
+    Description: API Key ID for Dev User
+    Value: !GetAtt LambdaAPIStack.Outputs.DevUserAPIKeyValue
 
-  # SuperUserAPIKeyId:
-  #   Description: API Key ID for Super User
-  #   Value: !GetAtt APIStack.Outputs.SuperUserApiKeyId
+  SuperUserAPIKeyId:
+    Description: API Key ID for Super User
+    Value: !GetAtt LambdaAPIStack.Outputs.SuperUserAPIKeyValue
 
-  # Test Command - For manual Lambda invocation
+  # Test Command
   TestCommandManual:
-    Description: Test the Lambda function manually
+    Description: Test the API with API keys
     Value: !Sub |
-      # Get the API keys from Secrets Manager:
-      DEV_KEY=$(aws secretsmanager get-secret-value --secret-id ${LambdaStack.Outputs.DevUserAPIKeySecretArn} --query SecretString --output text | jq -r .apiKey)
-      SUPER_KEY=$(aws secretsmanager get-secret-value --secret-id ${LambdaStack.Outputs.SuperUserAPIKeySecretArn} --query SecretString --output text | jq -r .apiKey)
+      # Get API key values:
+      DEV_KEY=$(aws apigateway get-api-key --api-key ${LambdaAPIStack.Outputs.DevUserAPIKeyValue} --include-value --region ${AWS::Region} --query value --output text)
+      SUPER_KEY=$(aws apigateway get-api-key --api-key ${LambdaAPIStack.Outputs.SuperUserAPIKeyValue} --include-value --region ${AWS::Region} --query value --output text)
       
-      # Test Lambda directly:
-      aws lambda invoke \
-        --function-name ${LambdaStack.Outputs.LambdaFunctionName} \
-        --payload '{"headers":{"x-api-key":"'$DEV_KEY'"},"body":"{\"tableName\":\"members\",\"limit\":5}"}' \
-        --region ${AWS::Region} \
-        response.json
-      
-      cat response.json
+      # Test with Dev key:
+      curl -X POST ${LambdaAPIStack.Outputs.APIEndpoint} \
+        -H "x-api-key: $DEV_KEY" \
+        -H "Content-Type: application/json" \
+        -d '{"tableName":"members","limit":5}'

@@ -7,6 +7,10 @@ Parameters:
     Description: Environment name (dev, staging, prod)
     Default: dev
   
+  LambdaExecutionRoleArn:
+    Type: String
+    Description: ARN of the Lambda Execution Role from IAM stack
+  
   LFDevUserArn:
     Type: String
     Description: ARN of the Dev User Role
@@ -63,6 +67,7 @@ Resources:
   AthenaQueryAPI:
     Type: AWS::ApiGateway::RestApi
     Properties:
+      Name: !Sub lf-athena-apikey-api-apk-${Environment}
       Description: !Sub API Gateway for Athena queries with Lake Formation TBAC - ${Environment}
       EndpointConfiguration:
         Types:
@@ -71,8 +76,8 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: Name
-          Value: !Sub lf-athena-apikey-api-apk-${Environment}
+        - Key: Project
+          Value: LakeFormationAccessControl
 
   QueryResource:
     Type: AWS::ApiGateway::Resource
@@ -87,89 +92,26 @@ Resources:
   DevUserAPIKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
+      Name: !Sub lf-apikey-dev-user-v3-${Environment}
       Description: !Sub API Key for Dev User - ${Environment}
       Enabled: true
 
   SuperUserAPIKey:
     Type: AWS::ApiGateway::ApiKey
     Properties:
+      Name: !Sub lf-apikey-super-user-v3-${Environment}
       Description: !Sub API Key for Super User - ${Environment}
       Enabled: true
 
   # ==========================================
   # Lambda Function
   # ==========================================
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: DynamoDBAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                Resource: !GetAtt APIKeyMappingTable.Arn
-        - PolicyName: SecretsManagerAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:ListSecrets
-                Resource: '*'
-        - PolicyName: AssumeRoles
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: sts:AssumeRole
-                Resource:
-                  - !Ref LFDevUserArn
-                  - !Ref LFSuperUserArn
-        - PolicyName: AthenaAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - athena:StartQueryExecution
-                  - athena:GetQueryExecution
-                  - athena:GetQueryResults
-                  - athena:StopQueryExecution
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub arn:aws:s3:::${AthenaBucketName}
-                  - !Sub arn:aws:s3:::${AthenaBucketName}/*
-              - Effect: Allow
-                Action:
-                  - glue:GetDatabase
-                  - glue:GetTable
-                  - glue:GetPartitions
-                Resource: '*'
-
   AthenaQueryFunction:
     Type: AWS::Lambda::Function
     Properties:
       Runtime: nodejs20.x
       Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Role: !Ref LambdaExecutionRoleArn
       Code:
         S3Bucket: !Ref LambdaCodeS3Bucket
         S3Key: !Ref LambdaCodeS3Key
@@ -179,7 +121,7 @@ Resources:
           ENVIRONMENT: !Ref Environment
           DATABASE_NAME: !Ref DatabaseName
           ATHENA_OUTPUT_BUCKET: !Ref AthenaBucketName
-          AWS_REGION: !Ref AWS::Region
+          REGION: !Ref AWS::Region
           SECRET_KEY_PREFIX: lf-apikey-
       Timeout: 300
       MemorySize: 512
@@ -382,6 +324,7 @@ Resources:
                 Action:
                   - secretsmanager:CreateSecret
                   - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
                 Resource: '*'
               - Effect: Allow
                 Action:
@@ -461,3 +404,9 @@ Outputs:
     Value: !Ref APIKeyMappingTable
     Export:
       Name: !Sub ${AWS::StackName}-DynamoDBTableName
+  
+  LambdaExecutionRoleArn:
+    Description: Lambda execution role ARN that needs to assume LF roles
+    Value: !Ref LambdaExecutionRoleArn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaExecutionRoleArn

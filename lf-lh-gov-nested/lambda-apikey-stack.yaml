@@ -37,6 +37,16 @@ Parameters:
     Type: String
     Description: S3 key for Lambda deployment package
     Default: lambda/athena-query-apikey.zip
+  
+  AthenaBucketName:
+    Type: String
+    Description: S3 bucket name for Athena query results
+    Default: aws-athena-query-results-480399101976-ap-southeast-2
+  
+  AthenaOutputPrefix:
+    Type: String
+    Description: S3 prefix for Athena query results
+    Default: api-key-poc/
 
 Resources:
   # DynamoDB Table for API Key Mappings
@@ -113,8 +123,8 @@ Resources:
                   - s3:PutObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/*
-                  - !Sub arn:aws:s3:::aws-athena-query-results-${AWS::AccountId}-${AWS::Region}
+                  - !Sub arn:aws:s3:::${AthenaBucketName}/*
+                  - !Sub arn:aws:s3:::${AthenaBucketName}
               
               # Glue metadata access
               - Sid: GlueAccess
@@ -150,7 +160,7 @@ Resources:
         Variables:
           API_KEY_TABLE: !Ref APIKeyMappingTable
           DATABASE_NAME: !Ref DatabaseName
-          ATHENA_OUTPUT_BUCKET: !Sub s3://aws-athena-query-results-${AWS::AccountId}-${AWS::Region}/
+          ATHENA_OUTPUT_BUCKET: !Sub s3://${AthenaBucketName}/${AthenaOutputPrefix}
           REGION: !Ref AWS::Region
           LOG_LEVEL: INFO
       Tags:

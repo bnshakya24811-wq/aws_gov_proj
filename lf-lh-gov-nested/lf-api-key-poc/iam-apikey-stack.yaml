@@ -22,6 +22,79 @@ Parameters:
     Default: api-key-poc/
 
 Resources:
+  # Lambda Execution Role - Created first so LF roles can trust it
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub lf-athena-apikey-lambda-role-apk-${Environment}
+      Description: Lambda execution role for Athena query function
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:ListSecrets
+                Resource: '*'
+        - PolicyName: AthenaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub arn:aws:s3:::${AthenaBucketName}
+                  - !Sub arn:aws:s3:::${AthenaBucketName}/*
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+        - PolicyName: AssumeRoles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-apikey-dev-user-role-apk-${Environment}
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-apikey-super-user-role-apk-${Environment}
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/lf-apikey-mappings-v3-${Environment}
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+
   # Dev User Role (assumable by Lambda)
   LFDevUserRole:
     Type: AWS::IAM::Role
@@ -35,10 +108,6 @@ Resources:
             Principal:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: sts:AssumeRole
-            Condition:
-              StringLike:
-                aws:PrincipalArn:
-                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-apikey-lambda-role-apk-${Environment}
       Policies:
         - PolicyName: !Sub lf-apikey-dev-user-athena-access-apk-${Environment}
           PolicyDocument:
@@ -116,10 +185,6 @@ Resources:
             Principal:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: sts:AssumeRole
-            Condition:
-              StringLike:
-                aws:PrincipalArn:
-                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-athena-apikey-lambda-role-apk-${Environment}
       Policies:
         - PolicyName: !Sub lf-apikey-super-user-athena-access-apk-${Environment}
           PolicyDocument:
@@ -183,6 +248,12 @@ Resources:
           Value: SuperUser
 
 Outputs:
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda Execution Role
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaExecutionRoleArn
+
   LFDevUserRoleArn:
     Description: ARN of the Dev User Role
     Value: !GetAtt LFDevUserRole.Arn
