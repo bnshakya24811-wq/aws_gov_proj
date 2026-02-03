@@ -224,128 +224,21 @@ Resources:
   StoreAPIKeysFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.11
-      Handler: index.handler
+      Runtime: nodejs20.x
+      Handler: handler-custom-resource.handler
       Role: !GetAtt StoreAPIKeysFunctionRole.Arn
       Timeout: 300
       Code:
-        ZipFile: |
-          import json
-          import boto3
-          import cfnresponse
-          
-          apigateway = boto3.client('apigateway')
-          secretsmanager = boto3.client('secretsmanager')
-          dynamodb = boto3.client('dynamodb')
-          
-          def handler(event, context):
-              try:
-                  request_type = event['RequestType']
-                  
-                  if request_type == 'Delete':
-                      # Cleanup secrets on stack deletion
-                      try:
-                          mappings = event['ResourceProperties']['APIKeyMappings']
-                          for mapping in mappings:
-                              secret_name = mapping['SecretName']
-                              try:
-                                  secretsmanager.delete_secret(
-                                      SecretId=secret_name,
-                                      ForceDeleteWithoutRecovery=True
-                                  )
-                                  print(f"Deleted secret: {secret_name}")
-                              except secretsmanager.exceptions.ResourceNotFoundException:
-                                  print(f"Secret {secret_name} already deleted")
-                      except Exception as e:
-                          print(f"Cleanup warning: {str(e)}")
-                      
-                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
-                      return
-                  
-                  # Process all API key mappings
-                  mappings = event['ResourceProperties']['APIKeyMappings']
-                  table_name = event['ResourceProperties']['TableName']
-                  env = event['ResourceProperties']['Environment']
-                  response_data = {}
-                  
-                  print(f"Processing {len(mappings)} API key mappings")
-                  
-                  for mapping in mappings:
-                      api_key_id = mapping['APIKeyId']
-                      user_name = mapping['UserName']
-                      group_label = mapping['GroupLabel']
-                      role_arn = mapping['RoleArn']
-                      secret_name = mapping['SecretName']
-                      
-                      # Get API key value from API Gateway
-                      print(f"Retrieving API key for {user_name}...")
-                      key_response = apigateway.get_api_key(apiKey=api_key_id, includeValue=True)
-                      api_key_value = key_response['value']
-                      
-                      # Store in Secrets Manager
-                      try:
-                          secret_response = secretsmanager.create_secret(
-                              Name=secret_name,
-                              Description=f'{user_name} API Key - {group_label} group',
-                              SecretString=json.dumps({
-                                  'apiKey': api_key_value,
-                                  'userName': user_name,
-                                  'groupLabel': group_label,
-                                  'apiKeyId': api_key_id
-                              }),
-                              Tags=[
-                                  {'Key': 'LFAPIKeyType', 'Value': 'api-key'},
-                                  {'Key': 'GroupLabel', 'Value': group_label},
-                                  {'Key': 'Environment', 'Value': env},
-                                  {'Key': 'ManagedBy', 'Value': 'CloudFormation'},
-                                  {'Key': 'Project', 'Value': 'LakeFormationAccessControl'}
-                              ]
-                          )
-                          secret_arn = secret_response['ARN']
-                          print(f"Created secret: {secret_name}")
-                      except secretsmanager.exceptions.ResourceExistsException:
-                          # Update existing secret (handles stack updates)
-                          print(f"Secret {secret_name} exists, updating...")
-                          secretsmanager.put_secret_value(
-                              SecretId=secret_name,
-                              SecretString=json.dumps({
-                                  'apiKey': api_key_value,
-                                  'userName': user_name,
-                                  'groupLabel': group_label,
-                                  'apiKeyId': api_key_id
-                              })
-                          )
-                          secret_arn = secretsmanager.describe_secret(SecretId=secret_name)['ARN']
-                          print(f"Updated secret: {secret_name}")
-                      
-                      # Store mapping in DynamoDB: secretName -> roleArn
-                      dynamodb.put_item(
-                          TableName=table_name,
-                          Item={
-                              'secretName': {'S': secret_name},
-                              'secretArn': {'S': secret_arn},
-                              'roleArn': {'S': role_arn},
-                              'userName': {'S': user_name},
-                              'groupLabel': {'S': group_label},
-                              'apiKeyId': {'S': api_key_id}
-                          }
-                      )
-                      print(f"Created DynamoDB mapping: {secret_name} -> {group_label} -> {role_arn}")
-                      
-                      # Add to response data
-                      response_data[f'{user_name}SecretArn'] = secret_arn
-                      response_data[f'{user_name}SecretName'] = secret_name
-                      response_data[f'{user_name}GroupLabel'] = group_label
-                  
-                  response_data['ProcessedCount'] = len(mappings)
-                  print(f"Successfully processed {len(mappings)} API keys")
-                  cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data)
-                  
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  import traceback
-                  traceback.print_exc()
-                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+        S3Bucket: lf-apikey-lambda-artifacts-dev-480399101976
+        S3Key: lambda-apikey.zip
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
 
   StoreAPIKeysFunctionRole:
     Type: AWS::IAM::Role
