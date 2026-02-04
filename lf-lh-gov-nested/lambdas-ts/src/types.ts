@@ -4,6 +4,7 @@
 
 export interface QueryRequest {
   tableName?: string;
+  database?: string;  // Database name (optional, defaults to env DATABASE_NAME)
   limit?: number;
   query?: string;  // For OAuth: raw SQL query
   username?: string;  // For OAuth: Cognito username
@@ -41,6 +42,7 @@ export interface EnvironmentConfig {
   apiKeyTable: string;
   databaseName: string;
   athenaOutputBucket: string;
+  athenaOutputPrefix?: string;
   region: string;
   environment: string;
   secretKeyPrefix?: string;

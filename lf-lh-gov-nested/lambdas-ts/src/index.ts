@@ -51,10 +51,20 @@ export const handler = async (
 
     // Initialize services
     const roleService = new RoleService(config.region);
+    
+    // Build full S3 output location (s3://bucket/prefix/)
+    let athenaOutputLocation = `s3://${config.athenaOutputBucket}/`;
+    if (config.athenaOutputPrefix) {
+      athenaOutputLocation += config.athenaOutputPrefix;
+      if (!athenaOutputLocation.endsWith('/')) {
+        athenaOutputLocation += '/';
+      }
+    }
+    
     const athenaService = new AthenaService(
       config.region,
-      config.databaseName,
-      config.athenaOutputBucket
+      body.database || config.databaseName,  // Use database from request or config
+      athenaOutputLocation
     );
 
     let roleArn: string;

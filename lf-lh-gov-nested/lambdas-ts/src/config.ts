@@ -8,6 +8,7 @@ export const getConfig = (): EnvironmentConfig => {
     apiKeyTable: process.env.DYNAMODB_TABLE || process.env.API_KEY_TABLE || '',
     databaseName: process.env.DATABASE_NAME || '',
     athenaOutputBucket: process.env.ATHENA_OUTPUT_BUCKET || '',
+    athenaOutputPrefix: process.env.ATHENA_OUTPUT_PREFIX || 'query-results/',
     region: process.env.AWS_REGION || process.env.REGION || 'us-east-1',
     environment: process.env.ENVIRONMENT || 'dev',
     secretKeyPrefix: process.env.SECRET_KEY_PREFIX || 'lf-apikey-',

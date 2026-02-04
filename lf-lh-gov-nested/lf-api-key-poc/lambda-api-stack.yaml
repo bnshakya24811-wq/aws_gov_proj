@@ -125,12 +125,12 @@ Resources:
       Enabled: true
 
   # ==========================================
-  # Lambda Function
+  # Lambda Function - Query Handler (TypeScript)
   # ==========================================
   AthenaQueryFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Runtime: python3.11
+      Runtime: nodejs20.x
       Handler: index.handler
       Role: !Ref LambdaExecutionRoleArn
       Code:
@@ -321,7 +321,7 @@ Resources:
       ServiceToken: !GetAtt StoreAPIKeysFunction.Arn
       TableName: !Ref APIKeyMappingTable
       Environment: !Ref Environment
-      Version: "2.7"  # Force custom resource update
+      Version: "2.8"  # Force custom resource update
       # Declarative array: APIKeyId + UserName + GroupLabel + RoleArn + SecretName
       APIKeyMappings:
         - APIKeyId: !Ref DevUserAPIKey
@@ -339,7 +339,7 @@ Resources:
         - APIKeyId: !Ref AnalystUserAPIKey
           UserName: analyst-user
           GroupLabel: analyst
-          RoleArn: !Ref LFSuperUserArn
+          RoleArn: !Ref LFDevUserArn
           SecretName: !Sub lf-apikey-analyst-user-v3-${Environment}
 
 Outputs:

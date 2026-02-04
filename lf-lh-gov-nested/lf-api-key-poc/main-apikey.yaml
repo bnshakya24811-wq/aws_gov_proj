@@ -24,7 +24,7 @@ Parameters:
   LambdaCodeS3Key:
     Type: String
     Description: S3 key for Lambda deployment package
-    Default: lambda/api-key-poc/athena-query-apikey-dev.zip
+    Default: lambda/api-key-poc/athena-query-lambda-ts-v1.zip
   
   AthenaBucketName:
     Type: String
@@ -74,7 +74,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: IAMStack
     Properties:
-      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-api-stack.yaml?v=5.0
+      TemplateURL: https://s3.ap-southeast-2.amazonaws.com/lf-lh-nest-sts/lf-api-key/lambda-api-stack.yaml?v=6.0
       Parameters:
         Environment: !Ref Environment
         LambdaExecutionRoleArn: !GetAtt IAMStack.Outputs.LambdaExecutionRoleArn
