@@ -1,0 +1,227 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB Table, API Keys, and Custom Resource for API Key Management
+
+Resources:
+  # ==========================================
+  # DynamoDB Table - Maps Secret Name to Role ARN
+  # ==========================================
+  APIKeyMappingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lf-apikey-mappings-v3-${self:provider.stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: secret_name
+          AttributeType: S
+        - AttributeName: group_label
+          AttributeType: S
+      KeySchema:
+        - AttributeName: secret_name
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GroupLabelIndex
+          KeySchema:
+            - AttributeName: group_label
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: ${self:provider.stage}
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # ==========================================
+  # API Gateway API Keys - Attach to Serverless-created API
+  # ==========================================
+  DevUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: lf-apikey-dev-user-v3-${self:provider.stage}
+      Description: API Key for Dev User - ${self:provider.stage}
+      Enabled: true
+
+  SuperUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: lf-apikey-super-user-v3-${self:provider.stage}
+      Description: API Key for Super User - ${self:provider.stage}
+      Enabled: true
+
+  AnalystUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: lf-apikey-analyst-user-v3-${self:provider.stage}
+      Description: API Key for Analyst User - ${self:provider.stage}
+      Enabled: true
+
+  SupportUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: lf-apikey-support-user-v3-${self:provider.stage}
+      Description: API Key for Support User - ${self:provider.stage}
+      Enabled: true
+
+  # ==========================================
+  # Usage Plan - Attach API Keys to Serverless-created API
+  # ==========================================
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - ApiGatewayDeployment${sls:instanceId}
+    Properties:
+      UsagePlanName: lf-apikey-usage-plan-${self:provider.stage}
+      Description: Usage plan for Lake Formation API
+      ApiStages:
+        - ApiId: !Ref ApiGatewayRestApi
+          Stage: ${self:provider.stage}
+      Throttle:
+        RateLimit: 100
+        BurstLimit: 200
+
+  UsagePlanKeyDev:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DevUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  UsagePlanKeySuper:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SuperUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  UsagePlanKeyAnalyst:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref AnalystUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  UsagePlanKeySupport:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SupportUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # ==========================================
+  # Custom Resource Lambda Role
+  # ==========================================
+  StoreAPIKeysFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lf-apikey-custom-resource-role-${self:provider.stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManageSecretsAndDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:DeleteSecret
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+
+  # ==========================================
+  # Custom Resource - Store API Keys in Secrets Manager and DynamoDB
+  # ==========================================
+  StoreAPIKeysInSecrets:
+    Type: Custom::StoreAPIKeys
+    DependsOn:
+      - DevUserAPIKey
+      - SuperUserAPIKey
+      - AnalystUserAPIKey
+      - SupportUserAPIKey
+      - APIKeyMappingTable
+    Properties:
+      ServiceToken: !GetAtt CustomResourceHandlerLambdaFunction.Arn
+      TableName: !Ref APIKeyMappingTable
+      Environment: ${self:provider.stage}
+      Version: "3.0"  # Force custom resource update
+      APIKeyMappings:
+        - APIKeyId: !Ref DevUserAPIKey
+          UserName: dev-user
+          GroupLabel: developer
+          RoleArn: !GetAtt LFDevUserRole.Arn
+          SecretName: lf-apikey-dev-user-v3-${self:provider.stage}
+        
+        - APIKeyId: !Ref SuperUserAPIKey
+          UserName: super-user
+          GroupLabel: admin
+          RoleArn: !GetAtt LFSuperUserRole.Arn
+          SecretName: lf-apikey-super-user-v3-${self:provider.stage}
+        
+        - APIKeyId: !Ref AnalystUserAPIKey
+          UserName: analyst-user
+          GroupLabel: analyst
+          RoleArn: !GetAtt LFDevUserRole.Arn
+          SecretName: lf-apikey-analyst-user-v3-${self:provider.stage}
+        
+        - APIKeyId: !Ref SupportUserAPIKey
+          UserName: support-user
+          GroupLabel: support
+          RoleArn: !GetAtt LFSuperUserRole.Arn
+          SecretName: lf-apikey-support-user-v3-${self:provider.stage}
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value:
+      Fn::Sub: https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${self:provider.stage}/query
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-APIEndpoint
+  
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt AthenaQueryLambdaFunction.Arn
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-LambdaFunctionArn
+  
+  DevUserAPIKeyId:
+    Description: Dev User API Key ID
+    Value: !Ref DevUserAPIKey
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-DevUserAPIKeyId
+  
+  SuperUserAPIKeyId:
+    Description: Super User API Key ID
+    Value: !Ref SuperUserAPIKey
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-SuperUserAPIKeyId
+  
+  AnalystUserAPIKeyId:
+    Description: Analyst User API Key ID
+    Value: !Ref AnalystUserAPIKey
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-AnalystUserAPIKeyId
+  
+  DynamoDBTableName:
+    Description: DynamoDB table name for secret to role mappings
+    Value: !Ref APIKeyMappingTable
+    Export:
+      Name: lf-apikey-poc-${self:provider.stage}-DynamoDBTableName
+

@@ -1,0 +1,7 @@
+customResourceHandler:
+  handler: src/handler-custom-resource.handler
+  name: lf-apikey-custom-resource-${self:provider.stage}
+  description: Custom resource handler for API key management
+  timeout: 300
+  memorySize: 256
+  role: StoreAPIKeysFunctionRole

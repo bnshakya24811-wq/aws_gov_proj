@@ -1,0 +1,7 @@
+.serverless/
+.build/
+dist/
+node_modules/
+*.log
+.env
+.aws-sam/

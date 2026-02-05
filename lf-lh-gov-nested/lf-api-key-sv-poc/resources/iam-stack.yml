@@ -1,0 +1,215 @@
+Resources:
+  # Lambda Execution Role - Created first so LF roles can trust it
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lf-athena-apikey-lambda-role-apk-${self:provider.stage}
+      Description: Lambda execution role for Athena query function
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:ListSecrets
+                Resource: '*'
+        - PolicyName: AthenaAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::${param:AthenaBucketName}
+                  - arn:aws:s3:::${param:AthenaBucketName}/*
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+        - PolicyName: AssumeRoles
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-apikey-dev-user-role-apk-${self:provider.stage}
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/lf-apikey-super-user-role-apk-${self:provider.stage}
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+      Tags:
+        - Key: Environment
+          Value: ${self:provider.stage}
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+
+  # Dev User Role (assumable by Lambda)
+  LFDevUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lf-apikey-dev-user-role-apk-${self:provider.stage}
+      Description: Dev user role with limited Lake Formation permissions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn:
+                  - !GetAtt LambdaExecutionRole.Arn
+      Policies:
+        - PolicyName: lf-apikey-dev-user-athena-access-apk-${self:provider.stage}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - arn:aws:s3:::${param:AthenaBucketName}/${param:AthenaOutputPrefix}*
+              
+              - Sid: S3BucketAccess
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - arn:aws:s3:::${param:AthenaBucketName}
+              
+              - Sid: S3DataAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - arn:aws:s3:::lf-lh-*
+                  - arn:aws:s3:::lf-lh-*/*
+              
+              - Sid: GlueAccess
+                Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartitions
+                Resource: '*'
+              - Sid: AthenaAccess
+                Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - athena:GetWorkGroup
+                Resource: '*'
+              - Sid: LakeFormationAccess
+                Effect: Allow
+                Action:
+                  - lakeformation:GetDataAccess
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: ${self:provider.stage}
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: UserType
+          Value: DevUser
+
+  # Super User Role (assumable by Lambda)
+  LFSuperUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: lf-apikey-super-user-role-apk-${self:provider.stage}
+      Description: Super user role with full Lake Formation permissions
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+            Condition:
+              StringLike:
+                aws:PrincipalArn:
+                  - !GetAtt LambdaExecutionRole.Arn
+      Policies:
+        - PolicyName: lf-apikey-super-user-athena-access-apk-${self:provider.stage}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3FullAccess
+                Effect: Allow
+                Action:
+                  - s3:*
+                Resource: '*'
+              - Sid: GlueFullAccess
+                Effect: Allow
+                Action:
+                  - glue:*
+                Resource: '*'
+              - Sid: AthenaFullAccess
+                Effect: Allow
+                Action:
+                  - athena:*
+                Resource: '*'
+              - Sid: LakeFormationFullAccess
+                Effect: Allow
+                Action:
+                  - lakeformation:*
+                Resource: '*'
+      Tags:
+        - Key: Environment
+          Value: ${self:provider.stage}
+        - Key: Project
+          Value: LakeFormationAPIKeyPOC
+        - Key: UserType
+          Value: SuperUser
+
+Outputs:
+  LambdaExecutionRoleArn:
+    Description: ARN of the Lambda Execution Role
+    Value: !GetAtt LambdaExecutionRole.Arn
+  
+  LFDevUserRoleArn:
+    Description: ARN of the Dev User Role
+    Value: !GetAtt LFDevUserRole.Arn
+  
+  LFSuperUserRoleArn:
+    Description: ARN of the Super User Role
+    Value: !GetAtt LFSuperUserRole.Arn

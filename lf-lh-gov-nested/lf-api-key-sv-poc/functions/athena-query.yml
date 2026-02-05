@@ -1,0 +1,27 @@
+athenaQuery:
+  handler: src/index.handler
+  name: lf-athena-query-${self:provider.stage}
+  description: Athena query handler with Lake Formation TBAC
+  timeout: 300
+  memorySize: 512
+  environment:
+    DYNAMODB_TABLE: !Ref APIKeyMappingTable
+    ENVIRONMENT: ${self:provider.stage}
+    DATABASE_NAME: ${param:DatabaseName}
+    ATHENA_OUTPUT_BUCKET: ${param:AthenaBucketName}
+    ATHENA_OUTPUT_PREFIX: ${param:AthenaOutputPrefix}
+    SECRET_KEY_PREFIX: lf-apikey-
+    DEV_USER_ROLE_ARN: !GetAtt LFDevUserRole.Arn
+    SUPER_USER_ROLE_ARN: !GetAtt LFSuperUserRole.Arn
+    REGION: ${self:provider.region}
+  role: LambdaExecutionRole
+  events:
+    - http:
+        path: query
+        method: post
+        cors: true
+        private: true  # Requires API key
+    - http:
+        path: query
+        method: options
+        cors: true

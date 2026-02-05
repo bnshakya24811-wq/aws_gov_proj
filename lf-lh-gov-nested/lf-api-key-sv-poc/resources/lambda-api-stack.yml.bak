@@ -1,0 +1,333 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Combined Lambda and API Stack with AWS API Gateway API Keys stored in Secrets Manager
+
+Parameters:
+  Environment:
+    Type: String
+    Description: Environment name (dev, staging, prod)
+    Default: dev
+  
+  DatabaseName:
+    Type: String
+    Description: Name of the Glue database
+  
+  LambdaCodeS3Bucket:
+    Type: String
+    Description: S3 bucket containing Lambda deployment package
+  
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key for Lambda deployment package
+    Default: lambda/api-key-poc/athena-query-apikey.zip
+  
+  AthenaBucketName:
+    Type: String
+    Description: S3 bucket name for Athena query results
+  
+  AthenaOutputPrefix:
+    Type: String
+    Description: S3 prefix for Athena query results
+
+Resources:
+  # ==========================================
+  # DynamoDB Table - Maps Secret Name to Role ARN
+  # ==========================================
+  APIKeyMappingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub lf-apikey-mappings-v3-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: secretName
+          AttributeType: S
+        - AttributeName: groupLabel
+          AttributeType: S
+      KeySchema:
+        - AttributeName: secretName
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: GroupLabelIndex
+          KeySchema:
+            - AttributeName: groupLabel
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  # ==========================================
+  # API Gateway API Keys (CloudFormation managed, not Serverless)
+  # ==========================================
+  DevUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-apikey-dev-user-v3-${Environment}
+      Description: !Sub API Key for Dev User - ${Environment}
+      Enabled: true
+
+  SuperUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-apikey-super-user-v3-${Environment}
+      Description: !Sub API Key for Super User - ${Environment}
+      Enabled: true
+
+  # ==========================================
+  # API Gateway REST API
+  # ==========================================
+  AthenaQueryAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub lf-athena-apikey-api-apk-${Environment}
+      Description: !Sub API Gateway for Athena queries with Lake Formation TBAC - ${Environment}
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      ApiKeySourceType: HEADER
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ParentId: !GetAtt AthenaQueryAPI.RootResourceId
+      PathPart: query
+
+  # ==========================================
+  # API Gateway API Keys (created first, then stored in Secrets Manager)
+  # ==========================================
+  DevUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-apikey-dev-user-v3-${Environment}
+      Description: !Sub API Key for Dev User - ${Environment}
+      Enabled: true
+
+  SuperUserAPIKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Sub lf-apikey-super-user-v3-${Environment}
+      Description: !Sub API Key for Super User - ${Environment}
+      Enabled: true
+
+  # ==========================================
+  # Lambda Function is defined in serverless.yml functions section
+  # Reference it using CloudFormation logical name
+  # ==========================================
+
+  # ==========================================
+  # API Gateway Method - API Key Required: true (Gateway validates presence, Lambda validates value)
+  # ==========================================
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      ApiKeyRequired: true  # Gateway ensures x-api-key header exists, Lambda validates the actual value
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AthenaQueryFunction.Arn}/invocations
+
+  QueryOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      ResourceId: !Ref QueryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ApiGatewayInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AthenaQueryFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${AthenaQueryAPI}/*/*
+
+  # ==========================================
+  # API Gateway Deployment
+  # ==========================================
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - QueryOptionsMethod
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref AthenaQueryAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: !Ref Environment
+
+  # ==========================================
+  # Custom Resource to Store API Keys in Secrets Manager and Create DynamoDB Mappings
+  # ==========================================
+  StoreAPIKeysFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: handler-custom-resource.handler
+      Role: !GetAtt StoreAPIKeysFunctionRole.Arn
+      Timeout: 300
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key: lambda-apikey-v2.zip
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: LakeFormationAccessControl
+
+  StoreAPIKeysFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ManageSecretsAndDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - apigateway:GET
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:TagResource
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:DeleteSecret
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt APIKeyMappingTable.Arn
+
+  # ==========================================
+  # Usage Plan (associate API keys with Serverless-created API Gateway)
+  # ==========================================
+  UsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    Properties:
+      UsagePlanName: !Sub lf-apikey-usage-plan-${Environment}
+      ApiStages:
+        - ApiId: !Ref ApiGatewayRestApi  # Serverless creates this
+          Stage: !Ref Environment
+
+  UsagePlanKeyDev:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DevUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  UsagePlanKeySuper:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref SuperUserAPIKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref UsagePlan
+
+  # ==========================================
+  # Custom Resource Invocation
+  # SINGLE SOURCE OF TRUTH: All mapping logic here
+  # ==========================================
+  StoreAPIKeysInSecrets:
+    Type: Custom::StoreAPIKeys
+    DependsOn:
+      - DevUserAPIKey
+      - SuperUserAPIKey
+      - APIKeyMappingTable
+    Properties:
+      ServiceToken: !GetAtt StoreAPIKeysFunction.Arn
+      TableName: !Ref APIKeyMappingTable
+      Environment: !Ref Environment
+      Version: "2.8"  # Force custom resource update
+      # Declarative array: APIKeyId + UserName + GroupLabel + RoleArn + SecretName
+      APIKeyMappings:
+        - APIKeyId: !Ref DevUserAPIKey
+          UserName: dev-user
+          GroupLabel: developer
+          RoleArn: !GetAtt LFDevUserRole.Arn
+          SecretName: !Sub lf-apikey-dev-user-v3-${Environment}
+        
+        - APIKeyId: !Ref SuperUserAPIKey
+          UserName: super-user
+          GroupLabel: admin
+          RoleArn: !GetAtt LFSuperUserRole.Arn
+          SecretName: !Sub lf-apikey-super-user-v3-${Environment}
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${AthenaQueryAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/query
+    Export:
+      Name: !Sub ${AWS::StackName}-APIEndpoint
+  
+  LambdaFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt AthenaQueryFunction.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-LambdaFunctionArn
+  
+  DevUserAPIKeyValue:
+    Description: Dev User API Key (retrieve from API Gateway console)
+    Value: !Ref DevUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-DevUserAPIKeyId
+  
+  SuperUserAPIKeyValue:
+    Description: Super User API Key (retrieve from API Gateway console)
+    Value: !Ref SuperUserAPIKey
+    Export:
+      Name: !Sub ${AWS::StackName}-SuperUserAPIKeyId
+  
+  DynamoDBTableName:
+    Description: DynamoDB table name for secret to role mappings
+    Value: !Ref APIKeyMappingTable
+    Export:
+      Name: !Sub ${AWS::StackName}-DynamoDBTableName
+

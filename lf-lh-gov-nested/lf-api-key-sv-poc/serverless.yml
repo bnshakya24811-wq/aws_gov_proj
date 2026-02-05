@@ -1,0 +1,55 @@
+service: lf-apikey-serverless
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${opt:region, 'ap-southeast-2'}
+  stage: ${opt:stage, 'dev'}
+  stackName: lf-apikey-poc-${self:provider.stage}
+  versionFunctions: false
+  deploymentBucket:
+    name: jenkins-deployment-480399101976
+  
+params:
+  dev:
+    DatabaseName: lf-lh-silver-db-o-sp5-${self:provider.stage}
+    AthenaBucketName: aws-athena-query-results-480399101976-ap-southeast-2
+    AthenaOutputPrefix: api-key-poc-${self:provider.stage}/
+    LambdaArtifactsBucket: lf-apikey-lambda-artifacts-${self:provider.stage}-480399101976
+    LFTagEnvironment: DBAccessScope-o-sp7-dev
+  
+  staging:
+    DatabaseName: lf-lh-silver-db-o-sp5-${self:provider.stage}
+    AthenaBucketName: aws-athena-query-results-480399101976-ap-southeast-2
+    AthenaOutputPrefix: api-key-poc-${self:provider.stage}/
+    LambdaArtifactsBucket: lf-apikey-lambda-artifacts-${self:provider.stage}-480399101976
+    LFTagEnvironment: DBAccessScope-o-sp7-dev  # Use dev tags for staging deployment
+  
+  prod:
+    DatabaseName: lf-lh-silver-db-o-sp5-${self:provider.stage}
+    AthenaBucketName: aws-athena-query-results-480399101976-ap-southeast-2
+    AthenaOutputPrefix: api-key-poc-${self:provider.stage}/
+    LambdaArtifactsBucket: lf-apikey-lambda-artifacts-${self:provider.stage}-480399101976
+    LFTagEnvironment: DBAccessScope-o-sp7-dev  # Use dev tags for prod deployment
+
+package:
+  individually: true
+  exclude:
+    - test/**
+    - .git/**
+    - .gitignore
+    - .serverless/**
+    - dist/**
+
+plugins:
+  - serverless-plugin-typescript
+
+functions:
+  - ${file(functions/athena-query.yml)}
+  - ${file(functions/custom-resource.yml)}
+
+resources:
+  - ${file(resources/iam-stack.yml)}
+  - ${file(resources/lambda-api-stack.yml)}
+  - ${file(resources/governance-stack.yml)}
